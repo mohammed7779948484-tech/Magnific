@@ -1,0 +1,181 @@
+"""Image generation API routes."""
+
+import time
+from typing import Any
+
+from fastapi import APIRouter, Depends
+
+from api.schemas.image_schemas import ImageReferenceInput, ImageRequest, ImageResponse
+from config.endpoints import Endpoints
+from core.client import MagnificClient
+from core.poller import Poller
+from core.uploader import Uploader
+from models.base import ModelRegistry
+from utils.file_helpers import FileHelpers
+from utils.logger import setup_logger
+
+logger = setup_logger("api.image")
+
+router = APIRouter(prefix="/api/image", tags=["Image Generation"])
+
+# These will be set during app initialization
+_client: MagnificClient | None = None
+_poller: Poller | None = None
+_uploader: Uploader | None = None
+
+
+def set_deps(client: MagnificClient, poller: Poller, uploader: Uploader):
+    """Set shared dependencies from the server."""
+    global _client, _poller, _uploader
+    _client = client
+    _poller = poller
+    _uploader = uploader
+
+
+@router.post("/generate", response_model=ImageResponse)
+async def generate_image(request: ImageRequest) -> ImageResponse:
+    """Generate an image using the specified model.
+
+    Supports both simple generation (no references) and reference-based generation.
+    """
+    assert _client is not None, "API not initialized"
+    assert _poller is not None, "Poller not initialized"
+    assert _uploader is not None, "Uploader not initialized"
+
+    start_time = time.time()
+
+    # Get the model
+    model = ModelRegistry.get_image(request.model)
+
+    # Calculate dimensions
+    from config.constants import AspectRatios
+    width, height = AspectRatios.dimensions(request.aspect_ratio, request.resolution)
+
+    # Process references if any
+    temporal_refs = []  # For start-tti-v2
+    render_refs = []    # For render/v4
+
+    for ref in request.references:
+        if ref.image_base64:
+            b64 = ref.image_base64
+        elif ref.image_path:
+            b64 = FileHelpers.file_to_base64(ref.image_path)
+        else:
+            continue
+
+        # Upload to temporal storage for start-tti-v2
+        try:
+            upload_result = _uploader.upload_temporal(base64_data=b64)
+            temporal_path = upload_result.get("path", "")
+            if temporal_path:
+                temporal_refs.append({
+                    "image": f"temporal:{temporal_path}",
+                    "type": ref.type,
+                    "category": ref.category,
+                    "label": ref.label,
+                    "frame": None,
+                })
+        except Exception as e:
+            logger.warning(f"Temporal upload failed for {ref.label}: {e}")
+
+        # Prepare base64 + id + label for render/v4
+        render_refs.append({
+            "id": ref.label,
+            "label": ref.label,
+            "image": b64,
+            "type": ref.type,
+            "category": ref.category,
+            "frame": None,
+        })
+
+    # Step 1: start-tti-v2
+    start_body = model.build_start_tti_body(
+        prompt=request.prompt,
+        aspect_ratio=request.aspect_ratio,
+        num_images=request.num_images,
+        references=temporal_refs,
+    )
+
+    tti_result = _client.post("/api/start-tti-v2", json_data=start_body)
+    request_token = tti_result.get("request_tokens", [None])[0]
+    family = tti_result.get("family")
+
+    if not request_token:
+        return ImageResponse(
+            success=False,
+            status="error",
+            message="Failed to get request token from start-tti-v2",
+        )
+
+    # Step 2: render/v4
+    render_body = model.build_render_body(
+        prompt=request.prompt,
+        family=family,
+        request_token=request_token,
+        aspect_ratio=request.aspect_ratio,
+        resolution=request.resolution,
+        width=width,
+        height=height,
+        seed=request.seed,
+        negative_prompt=request.negative_prompt,
+        image_references=render_refs,
+        num_images=request.num_images,
+    )
+
+    render_result = _client.post("/api/render/v4", json_data=render_body)
+
+    # Extract creation ID
+    creation_data = render_result.get("creation", {})
+    creation_id = creation_data.get("id")
+
+    if not creation_id and isinstance(render_result, dict):
+        # Try alternative response format
+        creation_id = render_result.get("id") or render_result.get("creation_id")
+
+    if not creation_id:
+        return ImageResponse(
+            success=True,
+            status="submitted",
+            family=family,
+            message="Generation submitted but creation ID not found in response",
+            elapsed=time.time() - start_time,
+        )
+
+    if not request.wait:
+        return ImageResponse(
+            success=True,
+            creation_id=creation_id,
+            family=family,
+            status="processing",
+            message="Generation started. Use GET /api/status/{id}?type=image to check progress.",
+            elapsed=time.time() - start_time,
+        )
+
+    # Step 3: Poll for completion
+    poll_result = _poller.poll_creation(creation_id, creation_type="image")
+    download_url = poll_result.get("download_url")
+    elapsed = time.time() - start_time
+
+    response = ImageResponse(
+        success=True,
+        creation_id=creation_id,
+        family=family,
+        status="completed",
+        image_url=download_url,
+        elapsed=elapsed,
+    )
+
+    # Step 4: Optionally download and return base64
+    if request.download and download_url:
+        try:
+            raw = _client.session.get(
+                download_url,
+                headers={"Referer": f"{Endpoints.BASE_URL}/"},
+            )
+            if raw.status_code == 200:
+                import base64
+                response.image_base64 = base64.b64encode(raw.content).decode("utf-8")
+        except Exception as e:
+            logger.warning(f"Download for base64 failed: {e}")
+
+    return response
