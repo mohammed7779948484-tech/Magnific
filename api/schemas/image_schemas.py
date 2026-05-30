@@ -2,7 +2,9 @@
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from config.constants import AspectRatios, Resolutions
 
 
 class ImageReferenceInput(BaseModel):
@@ -19,16 +21,36 @@ class ImageReferenceInput(BaseModel):
 
 class ImageRequest(BaseModel):
     """Image generation request."""
-    prompt: str = Field(..., description="Text prompt for image generation")
+
+    prompt: str = Field(..., min_length=1, max_length=2000, description="Text prompt for image generation")
     model: str = Field("imagen-nano-banana-2", description="Model slug")
     aspect_ratio: str = Field("1:1", description="Aspect ratio (1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3, 21:9)")
     resolution: str = Field("4k", description="Resolution: 1k, 2k, 4k")
     negative_prompt: str | None = Field(None, description="Negative prompt")
     references: list[ImageReferenceInput] = Field(default_factory=list, description="Reference images")
     num_images: int = Field(1, description="Number of images to generate")
-    seed: int | None = Field(None, description="Random seed")
+    seed: int | None = Field(None, ge=0, le=9999999, description="Random seed")
     wait: bool = Field(True, description="Wait for completion before responding")
     download: bool = Field(False, description="Download and return base64 data")
+
+    @field_validator("aspect_ratio")
+    @classmethod
+    def validate_aspect_ratio(cls, v: str) -> str:
+        if v not in AspectRatios.DATA:
+            raise ValueError(
+                f"Invalid aspect_ratio '{v}'. "
+                f"Must be one of: {', '.join(AspectRatios.DATA.keys())}"
+            )
+        return v
+
+    @field_validator("resolution")
+    @classmethod
+    def validate_resolution(cls, v: str) -> str:
+        if v not in Resolutions.IMAGE:
+            raise ValueError(
+                f"Invalid resolution '{v}'. Must be one of: {', '.join(Resolutions.IMAGE)}"
+            )
+        return v
 
 
 class ImageResponse(BaseModel):

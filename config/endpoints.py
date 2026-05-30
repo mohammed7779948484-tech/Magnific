@@ -1,4 +1,14 @@
-"""All API endpoints used by Magnific internal API."""
+"""All API endpoints used by Magnific internal API.
+
+Thread Safety:
+    The class-level BASE_URL and API_PREFIX are mutable shared state. All
+    mutations are guarded by ``_lock`` (a ``threading.Lock``).  Callers that
+    need to switch the base URL during concurrent request processing should
+    always go through :meth:`set_base_url` or :meth:`reset` to avoid corrupt
+    state (e.g. magnific URL paired with /pikaso prefix).
+"""
+
+import threading
 
 
 class Endpoints:
@@ -6,24 +16,51 @@ class Endpoints:
 
     Supports magnific.com (prefix: /app) and freepik.com (prefix: /pikaso).
     The prefix is auto-detected from the base URL.
+
+    **Thread safety:** All mutations of BASE_URL / API_PREFIX are serialized
+    via ``_lock`` so that concurrent calls to :meth:`set_base_url` or
+    :meth:`reset` can never produce an inconsistent URL/prefix pair.
     """
 
-    BASE_URL = "https://www.magnific.com"
-    API_PREFIX = "/app"
+    _DEFAULT_BASE_URL = "https://www.magnific.com"
+    _DEFAULT_API_PREFIX = "/app"
+
+    BASE_URL = _DEFAULT_BASE_URL
+    API_PREFIX = _DEFAULT_API_PREFIX
+
+    _lock: threading.Lock = threading.Lock()
 
     @classmethod
     def set_base_url(cls, url: str):
-        """Override the base URL and auto-detect API prefix."""
-        cls.BASE_URL = url
-        if "freepik.com" in url or "freepik.es" in url:
-            cls.API_PREFIX = "/pikaso"
-        else:
-            cls.API_PREFIX = "/app"
+        """Override the base URL and auto-detect API prefix.
+
+        Thread-safe: acquires ``_lock`` before mutating class variables.
+        """
+        with cls._lock:
+            cls.BASE_URL = url
+            if "freepik.com" in url or "freepik.es" in url:
+                cls.API_PREFIX = "/pikaso"
+            else:
+                cls.API_PREFIX = "/app"
 
     @classmethod
     def set_api_prefix(cls, prefix: str):
-        """Manually override the API prefix."""
-        cls.API_PREFIX = prefix
+        """Manually override the API prefix.
+
+        Thread-safe: acquires ``_lock`` before mutating.
+        """
+        with cls._lock:
+            cls.API_PREFIX = prefix
+
+    @classmethod
+    def reset(cls):
+        """Restore BASE_URL and API_PREFIX to their defaults.
+
+        Thread-safe: acquires ``_lock`` before mutating.
+        """
+        with cls._lock:
+            cls.BASE_URL = cls._DEFAULT_BASE_URL
+            cls.API_PREFIX = cls._DEFAULT_API_PREFIX
 
     @classmethod
     def _p(cls, path: str) -> str:

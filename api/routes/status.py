@@ -1,6 +1,10 @@
 """Status check and health routes."""
 
+import asyncio
+import json
+
 from fastapi import APIRouter, Query
+from fastapi.responses import StreamingResponse
 
 from api.schemas.common_schemas import HealthResponse, ModelsResponse, StatusResponse
 from core.client import MagnificClient
@@ -76,4 +80,33 @@ async def list_models():
         success=True,
         image=image_models,
         video=video_models,
+    )
+
+
+@router.get("/status/{creation_id}/stream")
+async def stream_status(
+    creation_id: str,
+    type: str = Query("image", description="Creation type: image or video"),
+):
+    """SSE endpoint for real-time creation status updates."""
+    assert _client is not None, "API not initialized"
+
+    async def event_generator():
+        try:
+            for update in _poller.poll_creation_stream(creation_id, creation_type=type):
+                yield f"data: {json.dumps(update)}\n\n"
+
+                if update.get("status") in ("completed", "failed", "timeout"):
+                    break
+        except Exception as e:
+            yield f"data: {json.dumps({'status': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )

@@ -1,8 +1,11 @@
 """FastAPI server for the Magnific local API."""
 
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from api.middleware.error_handler import register_error_handlers
 from api.middleware.rate_limiter import RateLimitMiddleware
@@ -106,16 +109,7 @@ def create_app(
     # Register error handlers
     register_error_handlers(app)
 
-    # Add rate limiting middleware
-    app.add_middleware(RateLimitMiddleware, max_requests=rate_limit)
-
-    # Register routes
-    app.include_router(image_router)
-    app.include_router(video_router)
-    app.include_router(status_router)
-
-    # CORS middleware — allow all origins for local use
-    from fastapi.middleware.cors import CORSMiddleware
+    # CORS middleware — MUST be first (before rate limiter)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -123,5 +117,18 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Rate limiting middleware — after CORS
+    app.add_middleware(RateLimitMiddleware, max_requests=rate_limit)
+
+    # Register routes
+    app.include_router(image_router)
+    app.include_router(video_router)
+    app.include_router(status_router)
+
+    # Static files — serve generated downloads
+    downloads_dir = os.path.join(os.path.dirname(__file__), "..", "downloads")
+    os.makedirs(downloads_dir, exist_ok=True)
+    app.mount("/downloads", StaticFiles(directory=downloads_dir), name="downloads")
 
     return app

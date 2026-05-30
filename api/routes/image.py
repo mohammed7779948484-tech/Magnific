@@ -1,5 +1,7 @@
 """Image generation API routes."""
 
+import asyncio
+import base64 as _base64
 import time
 from typing import Any
 
@@ -13,6 +15,7 @@ from core.uploader import Uploader
 from models.base import ModelRegistry
 from utils.file_helpers import FileHelpers
 from utils.logger import setup_logger
+from utils.retry import retry_with_backoff
 
 logger = setup_logger("api.image")
 
@@ -30,6 +33,22 @@ def set_deps(client: MagnificClient, poller: Poller, uploader: Uploader):
     _client = client
     _poller = poller
     _uploader = uploader
+
+
+# ── Sync wrappers with retry — run via asyncio.to_thread to avoid blocking ──
+
+def _do_post(endpoint: str, **kwargs) -> dict:
+    """Sync wrapper around _client.post for use with retry + to_thread."""
+    return _client.post(endpoint, **kwargs)  # type: ignore[union-attr]
+
+
+def _do_poll(creation_id: str, **kwargs) -> dict:
+    """Sync wrapper around _poller.poll_creation for use with retry + to_thread."""
+    return _poller.poll_creation(creation_id, **kwargs)  # type: ignore[union-attr]
+
+
+_post_with_retry = retry_with_backoff(max_retries=3, initial_delay=10.0)(_do_post)
+_poll_with_retry = retry_with_backoff(max_retries=3, initial_delay=10.0)(_do_poll)
 
 
 @router.post("/generate", response_model=ImageResponse)
@@ -65,7 +84,7 @@ async def generate_image(request: ImageRequest) -> ImageResponse:
 
         # Upload to temporal storage for start-tti-v2
         try:
-            upload_result = _uploader.upload_temporal(base64_data=b64)
+            upload_result = await asyncio.to_thread(_uploader.upload_temporal, base64_data=b64)
             temporal_path = upload_result.get("path", "")
             if temporal_path:
                 temporal_refs.append({
@@ -96,7 +115,7 @@ async def generate_image(request: ImageRequest) -> ImageResponse:
         references=temporal_refs,
     )
 
-    tti_result = _client.post("/api/start-tti-v2", json_data=start_body)
+    tti_result = await asyncio.to_thread(_post_with_retry, "/api/start-tti-v2", json_data=start_body)
     request_token = tti_result.get("request_tokens", [None])[0]
     family = tti_result.get("family")
 
@@ -122,7 +141,7 @@ async def generate_image(request: ImageRequest) -> ImageResponse:
         num_images=request.num_images,
     )
 
-    render_result = _client.post("/api/render/v4", json_data=render_body)
+    render_result = await asyncio.to_thread(_post_with_retry, "/api/render/v4", json_data=render_body)
 
     # Extract creation ID
     creation_data = render_result.get("creation", {})
@@ -152,7 +171,7 @@ async def generate_image(request: ImageRequest) -> ImageResponse:
         )
 
     # Step 3: Poll for completion
-    poll_result = _poller.poll_creation(creation_id, creation_type="image")
+    poll_result = await asyncio.to_thread(_poll_with_retry, creation_id, creation_type="image")
     download_url = poll_result.get("download_url")
     elapsed = time.time() - start_time
 
@@ -168,13 +187,14 @@ async def generate_image(request: ImageRequest) -> ImageResponse:
     # Step 4: Optionally download and return base64
     if request.download and download_url:
         try:
-            raw = _client.session.get(
+            raw = await asyncio.to_thread(
+                _client.session.get,
                 download_url,
                 headers={"Referer": f"{Endpoints.BASE_URL}/"},
             )
             if raw.status_code == 200:
-                import base64
-                response.image_base64 = base64.b64encode(raw.content).decode("utf-8")
+                b64_data = _base64.b64encode(raw.content).decode("utf-8")
+                response.image_base64 = f"data:image/png;base64,{b64_data}"
         except Exception as e:
             logger.warning(f"Download for base64 failed: {e}")
 

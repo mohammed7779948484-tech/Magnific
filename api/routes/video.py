@@ -1,5 +1,6 @@
 """Video generation API routes."""
 
+import asyncio
 import time
 
 from fastapi import APIRouter
@@ -12,6 +13,7 @@ from core.uploader import Uploader
 from models.base import ModelRegistry
 from utils.file_helpers import FileHelpers
 from utils.logger import setup_logger
+from utils.retry import retry_with_backoff
 
 logger = setup_logger("api.video")
 
@@ -27,6 +29,13 @@ def set_deps(client: MagnificClient, poller: Poller, uploader: Uploader):
     _client = client
     _poller = poller
     _uploader = uploader
+
+
+@retry_with_backoff(max_retries=3, initial_delay=15.0)
+def _post_video_generate(path: str, json_data: dict, headers: dict) -> dict:
+    """POST to video generate endpoint with retry on rate-limit errors."""
+    assert _client is not None, "API not initialized"
+    return _client.post(path, json_data=json_data, headers=headers)
 
 
 @router.post("/generate", response_model=VideoResponse)
@@ -100,10 +109,11 @@ async def generate_video(request: VideoRequest) -> VideoResponse:
     # Add x-request-origin header for video generation
     headers = {"x-request-origin": "video_generator"}
 
-    result = _client.post(
+    result = await asyncio.to_thread(
+        _post_video_generate,
         f"/api/video/generate?return_creations=true",
-        json_data=video_body,
-        headers=headers,
+        video_body,
+        headers,
     )
 
     # Extract creation ID
@@ -128,7 +138,9 @@ async def generate_video(request: VideoRequest) -> VideoResponse:
         )
 
     # Poll for completion
-    poll_result = _poller.poll_creation(creation_id, creation_type="video")
+    poll_result = await asyncio.to_thread(
+        _poller.poll_creation, creation_id, creation_type="video"
+    )
     download_url = poll_result.get("download_url")
     elapsed = time.time() - start_time
 
@@ -143,7 +155,8 @@ async def generate_video(request: VideoRequest) -> VideoResponse:
     # Optionally download and return base64
     if request.download and download_url:
         try:
-            raw = _client.session.get(
+            raw = await asyncio.to_thread(
+                _client.session.get,
                 download_url,
                 headers={"Referer": f"{Endpoints.BASE_URL}/"},
             )
