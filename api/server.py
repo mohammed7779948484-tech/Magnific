@@ -11,12 +11,15 @@ from api.middleware.error_handler import register_error_handlers
 from api.middleware.rate_limiter import RateLimitMiddleware
 from api.routes.image import router as image_router, set_deps as image_set_deps
 from api.routes.monitor import router as monitor_router, set_deps as monitor_set_deps
+from api.routes.queue import router as queue_router, set_deps as queue_set_deps
 from api.routes.status import router as status_router, set_deps as status_set_deps
 from api.routes.video import router as video_router, set_deps as video_set_deps
 from core.auth import Authenticator
 from core.client import MagnificClient
+from core.creation_registry import CreationRegistry
 from core.monitor import MagnificMonitor
 from core.poller import Poller
+from core.queue_manager import QueueManager
 from core.uploader import Uploader
 from models.base import ModelRegistry
 from utils.logger import setup_logger
@@ -87,12 +90,17 @@ def create_app(
         poller = Poller(_client, poll_interval=poll_interval, poll_timeout=poll_timeout)
         uploader = Uploader(_client)
         monitor = MagnificMonitor(_client)
+        creation_registry = CreationRegistry()
+        queue_manager = QueueManager(_client, creation_registry, enabled=False)
 
         # Inject into route modules
-        image_set_deps(_client, poller, uploader)
-        video_set_deps(_client, poller, uploader)
+        image_set_deps(_client, poller, uploader,
+                       queue_manager=queue_manager, creation_registry=creation_registry)
+        video_set_deps(_client, poller, uploader,
+                       queue_manager=queue_manager, creation_registry=creation_registry)
         status_set_deps(_client, poller)
         monitor_set_deps(monitor)
+        queue_set_deps(queue_manager, creation_registry)
 
         logger.info("Magnific API server ready")
 
@@ -142,6 +150,7 @@ def create_app(
     app.include_router(video_router)
     app.include_router(status_router)
     app.include_router(monitor_router)
+    app.include_router(queue_router)
 
     # Static files — serve generated downloads
     downloads_dir = os.path.join(os.path.dirname(__file__), "..", "downloads")

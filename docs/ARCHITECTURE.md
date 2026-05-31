@@ -21,8 +21,8 @@
 ┌─────────────────────────────────────────────────────────────┐
 │  Presentation Layer  —  main.py (CLI)  +  api/ (FastAPI)   │
 │  ├── main.py: cmd_serve, cmd_image, cmd_video, cmd_models │
-│  ├── api/routes/: image.py, video.py, status.py            │
-│  └── api/schemas/: Pydantic request/response models        │
+│  ├── api/routes/: image.py, video.py, status.py, queue.py │
+│  └── api/schemas/: image, video, common, queue_schemas     │
 ├─────────────────────────────────────────────────────────────┤
 │  Model Layer  —  models/                                    │
 │  ├── base.py: BaseImageModel, BaseVideoModel, ModelRegistry │
@@ -34,6 +34,8 @@
 │  ├── auth.py: Authenticator (XSRF + Device)                │
 │  ├── uploader.py: Uploader (3 upload strategies)            │
 │  ├── poller.py: Poller (status polling + download)          │
+│  ├── queue_manager.py: QueueManager (smart queue clearing)  │
+│  ├── creation_registry.py: CreationRegistry (track owns)    │
 │  └── exceptions.py: Exception hierarchy                     │
 ├─────────────────────────────────────────────────────────────┤
 │  Infrastructure Layer  —  config/ + utils/                   │
@@ -53,15 +55,17 @@
 - `cmd_models()` — عرض قائمة النماذج المسجلة
 
 **`api/`** — سيرفر FastAPI:
-- `server.py` — App factory مع Lifespan (إنشاء/إغلاق الـ client)
-- `routes/` — 3 routers:
+- `server.py` — App factory مع Lifespan (إنشاء/إغلاق الـ client + إنشاء CreationRegistry و QueueManager)
+- `routes/` — 4 routers:
   - `image.py` → POST `/api/image/generate`
   - `video.py` → POST `/api/video/generate`
   - `status.py` → GET `/api/health`, GET `/api/status/{id}`, GET `/api/models`
+  - `queue.py` → 5 نقاط نهاية للتحكم الذكي بالطابور (Smart Queue Control)
 - `schemas/` — نماذج Pydantic:
   - `image_schemas.py` → ImageRequest, ImageResponse, ImageReferenceInput
   - `video_schemas.py` → VideoRequest, VideoResponse, VideoReferenceInput, KeyframeInput
   - `common_schemas.py` → HealthResponse, StatusResponse, ModelsResponse, ErrorResponse
+  - `queue_schemas.py` → QueueStatusResponse, QueueClearResponse, QueueItemInfo, QueueBulkActionResponse
 - `middleware/`:
   - `rate_limiter.py` — Rate limiting لكل IP (in-memory)
   - `error_handler.py` — تحويل الاستثناءات إلى JSON responses
@@ -122,6 +126,24 @@
 - `poll_creation_stream()` — generator يُرسل تحديثات status تدريجياً (لـ SSE/WebSocket مستقبلاً)
 - `poll_image_by_family()` — polling بديل عبر /api/creations?family=...
 - يُميز بين type="image" (URL في result.url) و type="video" (URL في result.metadata.url)
+
+**`core/creation_registry.py` — CreationRegistry:**
+- سجلّ في الذاكرة (in-memory) يتتبع جميع عمليات التوليد التي بدأها المشروع
+- يُسجّل `creation_id` مع `owner_type` (image/video) و `timestamp`
+- يُستخدم من قِبل QueueManager لتحديد الملكية عند مسح الطابور
+- يوفر طرق: `register()`, `unregister()`, `is_owned()`, `get_all()`, `clear()`, `count()`
+- **فائدة التصميم**: يمنع مسح عمليات توليد بدأت من مصادر خارجية (مثل واجهة الويب)
+
+**`core/queue_manager.py` — QueueManager:**
+- إدارة ذكية لمسح طابور التوليد (queue clearing) مع وعي بالملكية
+- يستعلم عن جميع العناصر في الطابور عبر `GET /api/creations?status=queued`
+- يُميّز بين عناصر يملكها المشروع (owner) وعناصر خارجية (foreign)
+- يوفر استراتيجيات مسح متعددة:
+  - `clear_all()` — مسح كل شيء
+  - `clear_owned()` — مسح عناصر المشروع فقط
+  - `clear_foreign()` — مسح العناصر الخارجية فقط
+  - `clear_by_ids([...])` — مسح عناصر محددة بالمعرّف
+- يتكامل مع `CreationRegistry` للتحقق من الملكية
 
 **`core/exceptions.py` — التسلسل الهرمي للاستثناءات:**
 
@@ -273,7 +295,9 @@ Startup:
   2. CookieParser → تحميل الكوكيز
   3. MagnificClient → إنشاء العميل
   4. Authenticator.authenticate() → XSRF + Device
-  5. Inject deps → تمرير client/poller/uploader للـ routes
+  5. CreationRegistry() → إنشاء سجلّ تتبع التوليدات
+  6. QueueManager(client, creation_registry) → إنشاء مدير الطابور الذكي
+  7. Inject deps → تمرير client/poller/uploader/creation_registry/queue_manager للـ routes
 
 Shutdown:
   1. client.close() → إغلاق جلسة curl_cffi
@@ -293,19 +317,70 @@ Request → CORS Middleware → Rate Limit Middleware → Route Handler → Resp
 
 ```python
 # في server.py (lifespan):
-image_set_deps(_client, _poller, _uploader)
-video_set_deps(_client, _poller, _uploader)
+image_set_deps(_client, _poller, _uploader, _creation_registry)
+video_set_deps(_client, _poller, _uploader, _creation_registry)
 status_set_deps(_client, _poller)
+queue_set_deps(_queue_manager, _creation_registry)
 
 # في route (module-level):
 _client: MagnificClient | None = None
-def set_deps(client, poller, uploader):
-    global _client, _poller, _uploader
+def set_deps(client, poller, uploader, creation_registry):
+    global _client, _poller, _uploader, _creation_registry
     _client = client
     ...
 ```
 
 > هذا التصميم يسمح بتغيير الـ client أو إضافة عملاء متعددين مستقبلاً بدون تعديل الـ routes.
+> كذلك يسمح بتمرير `CreationRegistry` لعمليات التوليد لتسجيل الملكية تلقائياً.
+
+---
+
+## نظام التحكم الذكي بالطابور (Smart Queue Control)
+
+أُضيف في **Cycle 6** — نظام متكامل لإدارة طابور التوليد (queue) مع وعي بالملكية.
+
+### المكونات الأساسية
+
+| المكون | الملف | الوصف |
+|--------|-------|-------|
+| **CreationRegistry** | `core/creation_registry.py` | سجلّ في الذاكرة يتتبع عمليات التوليد التي بدأها المشروع. يُخزّن `creation_id` مع نوع المالك (image/video) والوقت. |
+| **QueueManager** | `core/queue_manager.py` | مدير الطابور الذكي — يستعلم عن عناصر الطابور ويميّز بين ما يملكه المشروع وما هو خارجي، ثم يُنفّذ عمليات المسح المناسبة. |
+
+### نقاط النهاية (5 Endpoints)
+
+| الطريقة | المسار | الوصف |
+|---------|--------|-------|
+| `GET` | `/api/queue/status` | حالة الطابور: عدد الإجمالي، عدد العناصر المملوكة، عدد العناصر الخارجية، قائمة تفصيلية |
+| `DELETE` | `/api/queue/clear` | مسح كل عناصر الطابور (مع تحذير) |
+| `DELETE` | `/api/queue/clear/owned` | مسح عناصر المشروع فقط — آمن، لا يؤثر على عمليات خارجية |
+| `DELETE` | `/api/queue/clear/foreign` | مسح العناصر الخارجية فقط — مفيد لتحرير الأماكن المزدحمة |
+| `DELETE` | `/api/queue/items` | مسح عناصر محددة بالمعرّفات (bulk action) |
+
+### خطافات التكامل (Integration Hooks)
+
+يتم تسجيل الملكية تلقائياً عند بدء أي عملية توليد:
+
+```
+عملية توليد صورة:
+  POST /api/image/generate
+    → start-tti-v2 → creation_id
+    → CreationRegistry.register(creation_id, owner_type="image")
+    → Poller.poll_creation()
+    → upon completion/failure → CreationRegistry.unregister(creation_id)
+
+عملية توليد فيديو:
+  POST /api/video/generate
+    → video/generate → creation_id
+    → CreationRegistry.register(creation_id, owner_type="video")
+    → Poller.poll_creation()
+    → upon completion/failure → CreationRegistry.unregister(creation_id)
+```
+
+### فائدة التصميم
+
+- **الوعي بالملكية**: يمنع حذف عمليات توليد بدأت من واجهة الويب أو مصادر أخرى عن طريق الخطأ
+- **المسح الانتقائي**: يمكن مسح عناصر المشروع فقط (`clear/owned`) أو الخارجية فقط (`clear/foreign`)
+- **عدم التأثير على core/ موجود**: النظام مُضاف كطبقة فوقية لا تُعدّل أي كود أساسي
 
 ---
 

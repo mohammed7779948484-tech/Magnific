@@ -292,3 +292,70 @@ def test_monitor_client_propagation():
     # All calls should have path starting with /api/
     for call in client.get_calls:
         assert call["path"].startswith("/api/")
+
+
+# ---------------------------------------------------------------------------
+# Called Shot 10: cancel_creation
+# ---------------------------------------------------------------------------
+
+def test_monitor_cancel_creation():
+    """cancel_creation should POST to /api/creations/cancel with identifier."""
+    client = FakeClient(xsrf_token="fake-token")
+    client.post_responses = [
+        {"success": True, "message": "Generation cancelled successfully"},
+    ]
+    from core.monitor import MagnificMonitor
+    monitor = MagnificMonitor(client=client)
+
+    result = monitor.cancel_creation("l7mHl6sgv9")
+
+    assert result["success"] is True
+    assert len(client.post_calls) == 1
+    assert client.post_calls[0]["path"] == "/api/creations/cancel"
+    assert client.post_calls[0]["json_data"]["identifier"] == "l7mHl6sgv9"
+
+
+# ---------------------------------------------------------------------------
+# Called Shot 11: cancel_creation handles 400 (processing status)
+# ---------------------------------------------------------------------------
+
+def test_monitor_cancel_creation_handles_400():
+    """cancel_creation with processing status returns error dict from API."""
+    client = FakeClient(xsrf_token="fake-token")
+    client.post_responses = [
+        {"error": "Can only cancel queued generations or delayed processing generations"},
+    ]
+    from core.monitor import MagnificMonitor
+    monitor = MagnificMonitor(client=client)
+
+    result = monitor.cancel_creation("processing_id")
+
+    assert "error" in result
+    assert len(client.post_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Called Shot 12: list_queued_creations
+# ---------------------------------------------------------------------------
+
+def test_monitor_list_queued_creations():
+    """list_queued_creations should fetch with status=queued."""
+    response = {
+        "data": [
+            {"id": 101, "identifier": "abc123", "status": "queued"},
+            {"id": 102, "identifier": "def456", "status": "queued"},
+        ],
+        "meta": {"total": 2, "current_page": 1, "last_page": 1, "per_page": 100},
+    }
+    client = _make_client_with_responses([response])
+    from core.monitor import MagnificMonitor
+    monitor = MagnificMonitor(client=client)
+
+    result = monitor.list_queued_creations()
+
+    assert len(result) == 2
+    assert result[0]["identifier"] == "abc123"
+    call = client.get_calls[0]
+    assert call["path"] == "/api/creations"
+    assert call["params"]["status"] == "queued"
+    assert call["params"]["per_page"] == 100

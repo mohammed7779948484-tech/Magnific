@@ -186,3 +186,32 @@ class MagnificMonitor:
             Dict with account limit details from Magnific API.
         """
         return self._safe_get("/api/limits")
+
+    def cancel_creation(self, identifier: str) -> dict:
+        """Cancel a queued or delayed_processing creation by identifier.
+
+        Args:
+            identifier: The creation identifier string to cancel.
+
+        Returns:
+            Dict from Magnific cancel API (success or error).
+        """
+        return self.client.post(
+            "/api/creations/cancel",
+            json_data={"identifier": identifier},
+        )
+
+    def list_queued_creations(self, per_page: int = 100) -> list[dict]:
+        """Fetch all currently queued creations.
+
+        Args:
+            per_page: Number of items to fetch (max 100).
+
+        Returns:
+            List of queued creation dicts from the API.
+        """
+        data = self._safe_get(
+            "/api/creations",
+            params={"status": "queued", "per_page": min(per_page, 100)},
+        )
+        return data.get("data", [])

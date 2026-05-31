@@ -19,6 +19,7 @@
 - **تخطي كامل لطبقات الحماية** — XSRF CSRF، Device Fingerprint، GR_TOKEN JWT
 - **سيرفر API محلي** — FastAPI مع Swagger UI، Rate Limiting، CORS، Error Handling
 - **Polling تلقائي** — مع إعادة المحاولة عند Rate Limit (Auto-retry with backoff)
+- **تحكم ذكي بالطابور** — مسح العمليات الخارجية تلقائياً قبل التوليد مع حماية عمليات المشروع
 
 ---
 
@@ -36,6 +37,8 @@ magnific/
 │   ├── auth.py                # المصادقة (XSRF + Device)
 │   ├── uploader.py            # رفع الملفات (3 طرق)
 │   ├── poller.py              # فحص حالة التوليد
+│   ├── queue_manager.py       # مدير الطابور الذكي
+│   ├── creation_registry.py   # سجل تتبع العمليات
 │   └── exceptions.py          # التسلسل الهرمي للاستثناءات
 │
 ├── models/                    # تعريف النماذج (منفصل عن core)
@@ -57,7 +60,9 @@ magnific/
 └── api/                       # سيرفر API المحلي
     ├── server.py              # إنشاء تطبيق FastAPI
     ├── routes/                # المسارات (image, video, status)
+    │   └── queue.py           # مسارات التحكم بالطابور
     ├── schemas/               # نماذج Pydantic للطلب والاستجابة
+    │   └── queue_schemas.py   # نماذج البيانات
     └── middleware/            # الوسائط (Rate Limiter, Error Handler)
 ```
 
@@ -168,6 +173,17 @@ python main.py models
 ```
 
 > **ملاحظة**: عند تلقي HTTP 429 (Rate Limit - concurrent creations)، يقوم الكود بإعادة المحاولة تلقائياً حتى 5 مرات مع زيادة تدريجية في الانتظار (15s, 30s, 45s, 60s, 75s).
+
+---
+
+## التحكم الذكي بالطابور
+
+نظام ذكي يميز بين العمليات التي أنشأها المشروع والعمليات الخارجية
+من حسابات أخرى. عند تفعيل المسح التلقائي، يتم إلغاء العمليات الخارجية
+فقط قبل كل عملية توليد جديدة، مع الحفاظ على ترتيب العمليات الخاصة بالمشروع.
+
+تفعيل: `POST /api/queue/configure` `{"auto_clear": true}`
+مسح يدوي: `POST /api/queue/clear`
 
 ---
 

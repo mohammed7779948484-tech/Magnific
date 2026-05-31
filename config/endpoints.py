@@ -109,6 +109,7 @@ class Endpoints:
 
     # ── Monitoring ────────────────────────────────────────────────
     ACCOUNT_LIMITS = "/api/limits"
+    CREATIONS_CANCEL = "/api/creations/cancel"
 
     # ── Extra Features ─────────────────────────────────────────────
     DESCRIBE_FRAMES = "/api/video/describe-frames"

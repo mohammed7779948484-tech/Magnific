@@ -262,3 +262,86 @@ class FakeUploader:
     def upload_video_audio(self, file_path: str) -> dict:
         self.upload_calls.append({"method": "upload_video_audio", "file_path": file_path})
         return self.upload_video_audio_result
+
+
+class FakeQueueManager:
+    """Lightweight real queue manager that returns configured responses.
+
+    Usage:
+        qm = FakeQueueManager()
+        qm.clear_result = {"cleared": 2, "errors": 0, ...}
+        result = qm.clear_external_queue()
+    """
+
+    def __init__(self, enabled: bool = False):
+        self._enabled = enabled
+        self.clear_result: dict[str, Any] = {
+            "cleared": 0, "errors": 0, "skipped_ours": 0,
+            "total_queued": 0, "enabled": enabled, "reason": "disabled",
+            "cancelled_identifiers": [], "skipped_identifiers": [],
+        }
+        self.snapshot_result: dict[str, Any] = {
+            "total_queued": 0, "ours_count": 0, "external_count": 0,
+            "items": [], "auto_clear_enabled": enabled,
+            "checked_at": "",
+        }
+        self.cancel_result: dict[str, Any] = {"success": True, "message": "Cancelled"}
+        self.clear_external_queue_calls: int = 0
+        self.cancel_creation_calls: list[str] = []
+        self.get_queue_snapshot_calls: int = 0
+        self.configure_calls: list[bool] = []
+
+    @property
+    def is_enabled(self) -> bool:
+        return self._enabled
+
+    def configure(self, enabled: bool) -> None:
+        self._enabled = enabled
+        self.configure_calls.append(enabled)
+
+    def clear_external_queue(self) -> dict:
+        self.clear_external_queue_calls += 1
+        return self.clear_result
+
+    def cancel_creation(self, identifier: str) -> dict:
+        self.cancel_creation_calls.append(identifier)
+        return self.cancel_result
+
+    def get_queue_snapshot(self) -> dict:
+        self.get_queue_snapshot_calls += 1
+        return self.snapshot_result
+
+
+class FakeCreationRegistry:
+    """Lightweight real registry that tracks creation identifiers.
+
+    Usage:
+        reg = FakeCreationRegistry()
+        reg._ours = {"abc123", "def456"}
+        assert reg.is_ours("abc123")
+    """
+
+    def __init__(self):
+        self._ours: set[str] = set()
+        self.register_calls: list[tuple[str, dict | None]] = []
+        self.unregister_calls: list[str] = []
+
+    def register(self, identifier: str, metadata: dict | None = None) -> None:
+        self._ours.add(identifier)
+        self.register_calls.append((identifier, metadata))
+
+    def is_ours(self, identifier: str) -> bool:
+        return identifier in self._ours
+
+    def unregister(self, identifier: str) -> None:
+        self._ours.discard(identifier)
+        self.unregister_calls.append(identifier)
+
+    def list_all(self) -> list[dict]:
+        return [{"identifier": i, "metadata": {}} for i in sorted(self._ours)]
+
+    def count(self) -> int:
+        return len(self._ours)
+
+    def clear(self) -> None:
+        self._ours.clear()

@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
@@ -22,13 +23,18 @@ router = APIRouter(prefix="/api/video", tags=["Video Generation"])
 _client: MagnificClient | None = None
 _poller: Poller | None = None
 _uploader: Uploader | None = None
+_queue_manager: Any = None  # Optional: QueueManager for smart queue clearing
+_registry: Any = None  # Optional: CreationRegistry for tracking our creations
 
 
-def set_deps(client: MagnificClient, poller: Poller, uploader: Uploader):
-    global _client, _poller, _uploader
+def set_deps(client: MagnificClient, poller: Poller, uploader: Uploader,
+             queue_manager=None, creation_registry=None):
+    global _client, _poller, _uploader, _queue_manager, _registry
     _client = client
     _poller = poller
     _uploader = uploader
+    _queue_manager = queue_manager
+    _registry = creation_registry
 
 
 @retry_with_backoff(max_retries=3, initial_delay=15.0)
@@ -51,6 +57,13 @@ async def generate_video(request: VideoRequest) -> VideoResponse:
 
     # Get the model
     model = ModelRegistry.get_video(request.model)
+
+    # ★ Queue clearing hook: clear external queue before our generation
+    if _queue_manager is not None and _queue_manager.is_enabled:
+        try:
+            await asyncio.to_thread(_queue_manager.clear_external_queue)
+        except Exception as e:
+            logger.warning(f"Queue clearing failed (non-fatal): {e}")
 
     # Process references — video refs use URLs
     refs = []
@@ -133,6 +146,18 @@ async def generate_video(request: VideoRequest) -> VideoResponse:
         )
 
     creation_id = creations[0].get("id")
+    creation_identifier = creations[0].get("identifier")
+
+    # ★ Registry hook: register our creation
+    if _registry is not None and creation_identifier:
+        try:
+            _registry.register(creation_identifier, metadata={
+                "creation_id": creation_id,
+                "tool": "video-generator",
+                "model": request.model,
+            })
+        except Exception as e:
+            logger.warning(f"Registry register failed (non-fatal): {e}")
 
     if not request.wait:
         return VideoResponse(
@@ -149,6 +174,13 @@ async def generate_video(request: VideoRequest) -> VideoResponse:
     )
     download_url = poll_result.get("download_url")
     elapsed = time.time() - start_time
+
+    # ★ Registry hook: unregister on completion
+    if _registry is not None and creation_identifier:
+        try:
+            _registry.unregister(creation_identifier)
+        except Exception as e:
+            logger.warning(f"Registry unregister failed (non-fatal): {e}")
 
     response = VideoResponse(
         success=True,
