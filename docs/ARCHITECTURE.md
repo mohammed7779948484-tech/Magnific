@@ -65,7 +65,7 @@
   - `image_schemas.py` → ImageRequest, ImageResponse, ImageReferenceInput
   - `video_schemas.py` → VideoRequest, VideoResponse, VideoReferenceInput, KeyframeInput
   - `common_schemas.py` → HealthResponse, StatusResponse, ModelsResponse, ErrorResponse
-  - `queue_schemas.py` → QueueStatusResponse, QueueClearResponse, QueueItemInfo, QueueBulkActionResponse
+  - `queue_schemas.py` → QueueClearResponse, QueueStatusResponse, QueueCancelResponse, QueueConfigureRequest, QueueConfigureResponse, RegistryItem, RegistryResponse, QueueItemWithOwnership
 - `middleware/`:
   - `rate_limiter.py` — Rate limiting لكل IP (in-memory)
   - `error_handler.py` — تحويل الاستثناءات إلى JSON responses
@@ -129,21 +129,24 @@
 
 **`core/creation_registry.py` — CreationRegistry:**
 - سجلّ في الذاكرة (in-memory) يتتبع جميع عمليات التوليد التي بدأها المشروع
-- يُسجّل `creation_id` مع `owner_type` (image/video) و `timestamp`
+- يُسجّل `identifier` مع `metadata` (creation_id, tool, model) و `timestamp`
 - يُستخدم من قِبل QueueManager لتحديد الملكية عند مسح الطابور
-- يوفر طرق: `register()`, `unregister()`, `is_owned()`, `get_all()`, `clear()`, `count()`
+- يوفر طرق: `register()`, `unregister()`, `is_ours()`, `list_all()`, `clear()`, `count()`
+- Thread-safe عبر `threading.Lock` للوصول المتزامن
 - **فائدة التصميم**: يمنع مسح عمليات توليد بدأت من مصادر خارجية (مثل واجهة الويب)
+- **Safe default**: عند إعادة التشغيل، يُفرّغ تلقائياً — تُعامَل جميع العمليات كـ خارجية
 
 **`core/queue_manager.py` — QueueManager:**
 - إدارة ذكية لمسح طابور التوليد (queue clearing) مع وعي بالملكية
-- يستعلم عن جميع العناصر في الطابور عبر `GET /api/creations?status=queued`
-- يُميّز بين عناصر يملكها المشروع (owner) وعناصر خارجية (foreign)
-- يوفر استراتيجيات مسح متعددة:
-  - `clear_all()` — مسح كل شيء
-  - `clear_owned()` — مسح عناصر المشروع فقط
-  - `clear_foreign()` — مسح العناصر الخارجية فقط
-  - `clear_by_ids([...])` — مسح عناصر محددة بالمعرّف
+- يستعلم عن جميع العناصر في الطابور عبر `GET /api/creations?status=queued&per_page=100`
+- يُميّز بين عناصر يملكها المشروع (`registry.is_ours()`) وعناصر خارجية
+- يوفر الطرق:
+  - `clear_external_queue()` — يُلغي العمليات الخارجية فقط، يتخطى عمليات المشروع
+  - `cancel_creation(identifier)` — يُلغي عملية واحدة بالمعرّف
+  - `get_queue_snapshot()` — لقطة الطابور مع تصنيف الملكية لكل عنصر
+  - `configure(enabled)` — تفعيل/تعطيل المسح التلقائي
 - يتكامل مع `CreationRegistry` للتحقق من الملكية
+- **قاعدة مهمة**: إذا كانت جميع العمليات من المشروع، لا يُلغى شيء (يُحافظ على الترتيب الطبيعي)
 
 **`core/exceptions.py` — التسلسل الهرمي للاستثناءات:**
 
@@ -350,11 +353,11 @@ def set_deps(client, poller, uploader, creation_registry):
 
 | الطريقة | المسار | الوصف |
 |---------|--------|-------|
-| `GET` | `/api/queue/status` | حالة الطابور: عدد الإجمالي، عدد العناصر المملوكة، عدد العناصر الخارجية، قائمة تفصيلية |
-| `DELETE` | `/api/queue/clear` | مسح كل عناصر الطابور (مع تحذير) |
-| `DELETE` | `/api/queue/clear/owned` | مسح عناصر المشروع فقط — آمن، لا يؤثر على عمليات خارجية |
-| `DELETE` | `/api/queue/clear/foreign` | مسح العناصر الخارجية فقط — مفيد لتحرير الأماكن المزدحمة |
-| `DELETE` | `/api/queue/items` | مسح عناصر محددة بالمعرّفات (bulk action) |
+| `POST` | `/api/queue/clear` | مسح العمليات الخارجية فقط ( queued ) — عمليات المشروع تُتخطى |
+| `GET` | `/api/queue/status` | لقطة الطابور مع تصنيف الملكية لكل عنصر (`is_ours`) |
+| `POST` | `/api/queue/cancel/{identifier}` | إلغاء عملية محددة بالمعرّف |
+| `POST` | `/api/queue/configure` | تفعيل/تعطيل المسح التلقائي (`{"auto_clear": true/false}`) |
+| `GET` | `/api/queue/registry` | عرض العمليات المسجلة في سجلّ المشروع |
 
 ### خطافات التكامل (Integration Hooks)
 
@@ -363,23 +366,29 @@ def set_deps(client, poller, uploader, creation_registry):
 ```
 عملية توليد صورة:
   POST /api/image/generate
-    → start-tti-v2 → creation_id
-    → CreationRegistry.register(creation_id, owner_type="image")
+    → QueueManager.clear_external_queue() (إذا مفعّل)
+    → start-tti-v2 → family, request_token
+    → render/v4 → creation_id + identifier
+    → CreationRegistry.register(identifier, metadata={creation_id, tool, model})
     → Poller.poll_creation()
-    → upon completion/failure → CreationRegistry.unregister(creation_id)
+    → upon completion/failure → CreationRegistry.unregister(identifier)
 
 عملية توليد فيديو:
   POST /api/video/generate
-    → video/generate → creation_id
-    → CreationRegistry.register(creation_id, owner_type="video")
+    → QueueManager.clear_external_queue() (إذا مفعّل)
+    → video/generate → creations[] → creation_id + identifier
+    → CreationRegistry.register(identifier, metadata={creation_id, tool, model})
     → Poller.poll_creation()
-    → upon completion/failure → CreationRegistry.unregister(creation_id)
+    → upon completion/failure → CreationRegistry.unregister(identifier)
 ```
+
+> جميع الخطافات ملفوفة في `try/except` مع `logger.warning` — فشل المسح أو التسجيل لا يُعطّل عملية التوليد.
 
 ### فائدة التصميم
 
 - **الوعي بالملكية**: يمنع حذف عمليات توليد بدأت من واجهة الويب أو مصادر أخرى عن طريق الخطأ
-- **المسح الانتقائي**: يمكن مسح عناصر المشروع فقط (`clear/owned`) أو الخارجية فقط (`clear/foreign`)
+- **الحفاظ على ترتيب المشروع**: إذا كانت جميع العمليات من المشروع، لا يُلغى شيء
+- **opt-in**: المسح التلقائي مُعطّل افتراضياً، يجب تفعيله صراحة
 - **عدم التأثير على core/ موجود**: النظام مُضاف كطبقة فوقية لا تُعدّل أي كود أساسي
 
 ---

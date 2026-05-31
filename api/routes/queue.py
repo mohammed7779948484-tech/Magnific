@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
+from api.schemas.queue_schemas import QueueConfigureRequest
 from core.creation_registry import CreationRegistry
 from core.queue_manager import QueueManager
 from utils.logger import setup_logger
@@ -124,16 +125,14 @@ async def cancel_specific(identifier: str):
 # ---------------------------------------------------------------------------
 
 @router.post("/configure")
-async def configure_queue(body: dict | None = None):
+async def configure_queue(body: QueueConfigureRequest | None = None):
     """Enable or disable automatic queue clearing before generation.
 
     Accepts JSON body: {"auto_clear": true/false}
     """
     _require_deps()
 
-    auto_clear = False
-    if body and isinstance(body, dict):
-        auto_clear = bool(body.get("auto_clear", False))
+    auto_clear = body.auto_clear if body else False
 
     _queue_manager.configure(auto_clear)
 

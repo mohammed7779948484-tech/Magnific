@@ -260,99 +260,119 @@ curl -X POST http://localhost:8080/api/video/generate \
 
 ## نقاط التحكم بالطابور (Queue Control)
 
-نقاط نهاية مخصصة لإدارة الطابور الخارجي (outbound queue) والتحكم في العمليات المسجلة. تتيح لك مراقبة حالة الطابور، إلغاء عمليات محددة، تهيئة السلوك التلقائي، وعرض سجل العمليات.
+نظام ذكي يميّز بين العمليات التي أنشأها المشروع والعمليات الخارجية (مستخدمون آخرون على نفس الحساب المشترك). يُلغي فقط العمليات الخارجية ويحافظ على ترتيب عمليات المشروع. المسح التلقائي **مُعطّل افتراضياً** (opt-in).
+
+> **ملاحظة**: إذا كانت جميع العمليات في الطابور من المشروع، لن يُلغى أي شيء — يُحافظ على الترتيب الطبيعي.
 
 ---
 
 ### POST /api/queue/clear
 
-مسح جميع العناصر المعلقة في الطابور الخارجي. يُزيل فقط العمليات التي لم تبدأ المعالجة بعد.
+مسح العمليات الخارجية المعلقة في الطابور ( queued فقط ). العمليات المسجلة كملكية المشروع تُتخطى ولا تُلغى.
 
-#### Request Body
+#### Request
 
-```json
-{
-  "scope": "all"
-}
-```
+لا يوجد request body مطلوب.
 
-| الحقل | النوع | افتراضي | مطلوب؟ | الوصف |
-|-------|-------|---------|--------|-------|
-| `scope` | string | `"all"` | لا | نطاق المسح: `all` (الكل) أو `pending` (المعلقة فقط) |
-
-#### Response (QueueClearResponse)
+#### Response
 
 ```json
 {
   "success": true,
-  "cleared_count": 7,
-  "scope": "all",
-  "message": "تم مسح 7 عمليات من الطابور الخارجي"
+  "enabled": true,
+  "cleared": 3,
+  "errors": 0,
+  "skipped_ours": 2,
+  "total_queued": 5,
+  "reason": "cleared",
+  "details": {
+    "cancelled_identifiers": ["abc123", "def456", "ghi789"],
+    "skipped_identifiers": ["ours_001", "ours_002"]
+  },
+  "timestamp": "2026-05-31T03:30:00Z"
 }
 ```
 
 | الحقل | النوع | الوصف |
 |-------|-------|-------|
 | `success` | bool | نجاح العملية |
-| `cleared_count` | int | عدد العمليات التي تم مسحها |
-| `scope` | string | النطاق المُستخدم في المسح |
-| `message` | string | رسالة تأكيد |
+| `enabled` | bool | هل المسح التلقائي مفعّل |
+| `cleared` | int | عدد العمليات التي تم إلغاؤها |
+| `errors` | int | عدد الأخطاء أثناء الإلغاء |
+| `skipped_ours` | int | عدد عمليات المشروع التي تم تخطيها |
+| `total_queued` | int | إجمالي العمليات في الطابور |
+| `reason` | string\|null | سبب النتيجة: `cleared`، `all_ours`، `disabled`، `no_external` |
+| `details.cancelled_identifiers` | array | قائمة معرّفات العمليات المُلغاة |
+| `details.skipped_identifiers` | array | قائمة معرّفات العمليات المُتخطاة |
+| `timestamp` | string | وقت تنفيذ العملية (ISO 8601) |
+
+#### قيم `reason`
+
+| القيمة | الوصف |
+|--------|-------|
+| `"disabled"` | المسح التلقائي مُعطّل |
+| `"all_ours"` | جميع العمليات في الطابور تخص المشروع — لم يُلغى شيء |
+| `"cleared"` | تم إلغاء عمليات خارجية |
+| `"no_external"` | لا توجد عمليات خارجية للإلغاء |
 
 #### مثال curl
 
 ```bash
-curl -X POST http://localhost:8080/api/queue/clear \
-  -H "Content-Type: application/json" \
-  -d '{"scope": "all"}'
-```
-
-```bash
-# مسح المعلقة فقط
-curl -X POST http://localhost:8080/api/queue/clear \
-  -H "Content-Type: application/json" \
-  -d '{"scope": "pending"}'
+curl -X POST http://localhost:8080/api/queue/clear
 ```
 
 ---
 
 ### GET /api/queue/status
 
-حالة الطابور الحالية مع تصنيف الملكية. يعرض عدد العمليات حسب نوعها وحالتها ومالكها.
+حالة الطابور الحالية مع تصنيف الملكية لكل عنصر (هل هو من المشروع أم خارجي).
 
-#### Response (QueueStatusResponse)
+#### Response
 
 ```json
 {
-  "success": true,
-  "total": 12,
-  "by_status": {
-    "queued": 8,
-    "processing": 3,
-    "completed": 1
-  },
-  "by_type": {
-    "image": 7,
-    "video": 5
-  },
-  "by_owner": {
-    "system": 5,
-    "user:alice": 4,
-    "user:bob": 3
-  },
-  "oldest_queued": "2025-01-15T10:30:00Z",
-  "newest_queued": "2025-01-15T10:35:22Z"
+  "total_queued": 5,
+  "ours": 2,
+  "external": 3,
+  "items": [
+    {
+      "id": 123,
+      "identifier": "ours_001",
+      "tool": "text-to-image",
+      "model": "imagen-nano-banana-2",
+      "is_ours": true,
+      "created_at": "2026-05-31T03:25:00Z"
+    },
+    {
+      "id": 456,
+      "identifier": "ext_abc",
+      "tool": "video-generator",
+      "model": "bytedance-seedance-pro-2.0",
+      "is_ours": false,
+      "created_at": "2026-05-31T03:26:00Z"
+    }
+  ],
+  "processing_count": 0,
+  "auto_clear_enabled": false,
+  "checked_at": "2026-05-31T03:30:00Z"
 }
 ```
 
 | الحقل | النوع | الوصف |
 |-------|-------|-------|
-| `success` | bool | نجاح الاستعلام |
-| `total` | int | إجمالي العمليات في الطابور |
-| `by_status` | object | تصنيف حسب الحالة (queued/processing/completed) |
-| `by_type` | object | تصنيف حسب النوع (image/video) |
-| `by_owner` | object | تصنيف حسب المالك |
-| `oldest_queued` | string/null | تاريخ أقدم عملية في الانتظار |
-| `newest_queued` | string/null | تاريخ أحدث عملية في الانتظار |
+| `total_queued` | int | إجمالي العمليات في الطابور |
+| `ours` | int | عدد عمليات المشروع |
+| `external` | int | عدد العمليات الخارجية |
+| `items` | array | قائمة التفاصيل مع `is_ours` لكل عنصر |
+| `items[].id` | int\|null | رقم العملية |
+| `items[].identifier` | string\|null | معرّف العملية (يُستخدم للإلغاء) |
+| `items[].tool` | string\|null | نوع الأداة (text-to-image، video-generator) |
+| `items[].model` | string\|null | النموذج المُستخدم |
+| `items[].is_ours` | bool | هل العملية من المشروع |
+| `items[].created_at` | string\|null | تاريخ الإنشاء |
+| `processing_count` | int | عدد العمليات قيد المعالجة حالياً |
+| `auto_clear_enabled` | bool | هل المسح التلقائي مفعّل |
+| `checked_at` | string\|null | وقت الفحص (ISO 8601) |
 
 #### مثال curl
 
@@ -364,120 +384,79 @@ curl http://localhost:8080/api/queue/status
 
 ### POST /api/queue/cancel/{identifier}
 
-إلغاء عملية محددة من الطابور باستخدام معرفها. يدعم المعرف الرقمي (`creation_id`) أو معرف العملية (`creation_id`). يمكن إلغاء العمليات المعلقة أو قيد المعالجة.
+إلغاء عملية محددة من الطابور باستخدام معرّفها. يُلغي فقط العمليات ذات الحالة `queued` أو `delayed_processing`. العمليات `processing` لا يمكن إلغاؤها.
 
 #### Path Parameters
 
 | الحقل | النوع | مطلوب؟ | الوصف |
 |-------|-------|--------|-------|
-| `identifier` | string/int | نعم | معرف العملية المراد إلغاؤها |
+| `identifier` | string | نعم | معرّف العملية المراد إلغاؤها |
 
-#### Request Body (اختياري)
+#### Request
 
-```json
-{
-  "reason": "لم تعد مطلوبة"
-}
-```
+لا يوجد request body مطلوب.
 
-| الحقل | النوع | افتراضي | مطلوب؟ | الوصف |
-|-------|-------|---------|--------|-------|
-| `reason` | string | null | لا | سبب الإلغاء (يُسجّل في السجل) |
-
-#### Response (QueueCancelResponse)
+#### Response
 
 ```json
 {
   "success": true,
-  "identifier": 3070624230,
-  "cancelled": true,
-  "status_before": "queued",
-  "message": "تم إلغاء العملية 3070624230 بنجاح"
+  "identifier": "l7mHl6sgv9",
+  "message": "Cancel request sent"
 }
 ```
 
 | الحقل | النوع | الوصف |
 |-------|-------|-------|
-| `success` | bool | نجاح الإلغاء |
-| `identifier` | string/int | معرف العملية |
-| `cancelled` | bool | هل تم الإلغاء فعلاً |
-| `status_before` | string | حالة العملية قبل الإلغاء |
-| `message` | string | رسالة تأكيد |
+| `success` | bool | نجاح العملية |
+| `identifier` | string | معرّف العملية |
+| `message` | string\|null | رسالة تأكيد أو خطأ |
 
-#### الاستجابة عند الفشل
-
-```json
-{
-  "success": false,
-  "identifier": 3070624230,
-  "cancelled": false,
-  "error": "العملية غير موجودة في الطابور"
-}
-```
-
-#### أمثلة curl
+#### مثال curl
 
 ```bash
-# إلغاء عملية برقمها
-curl -X POST http://localhost:8080/api/queue/cancel/3070624230 \
-  -H "Content-Type: application/json" \
-  -d '{"reason": "لم تعد مطلوبة"}'
-```
-
-```bash
-# إلغاء بدون سبب
-curl -X POST http://localhost:8080/api/queue/cancel/3070624230
+curl -X POST http://localhost:8080/api/queue/cancel/l7mHl6sgv9
 ```
 
 ---
 
 ### POST /api/queue/configure
 
-تهيئة سلوك الطابور، بما في ذلك تفعيل أو تعطيل المسح التلقائي للعمليات المكتملة. يُستخدم للتحكم في دورة حياة الطابور تلقائيًا.
+تفعيل أو تعطيل المسح التلقائي للعمليات الخارجية قبل كل عملية توليد جديدة. مُعطّل افتراضياً (off).
 
 #### Request Body (QueueConfigureRequest)
 
 ```json
 {
-  "auto_clear": true,
-  "auto_clear_delay": 300,
-  "max_queue_size": 50
+  "auto_clear": true
 }
 ```
 
 | الحقل | النوع | افتراضي | مطلوب؟ | الوصف |
 |-------|-------|---------|--------|-------|
-| `auto_clear` | bool | `true` | لا | تفعيل المسح التلقائي للعمليات المكتملة |
-| `auto_clear_delay` | int | `300` | لا | مدة الانتظار قبل المسح التلقائي (بالثواني) |
-| `max_queue_size` | int | `50` | لا | الحد الأقصى لحجم الطابور |
+| `auto_clear` | bool | `false` | لا | تفعيل المسح التلقائي للعمليات الخارجية قبل التوليد |
 
-#### Response (QueueConfigureResponse)
+#### Response
 
 ```json
 {
-  "success": true,
-  "configuration": {
-    "auto_clear": true,
-    "auto_clear_delay": 300,
-    "max_queue_size": 50
-  },
-  "message": "تم تحديث تهيئة الطابور بنجاح"
+  "auto_clear": true,
+  "message": "Automatic queue clearing enabled. Non-project queued creations will be cancelled before each generation."
 }
 ```
 
 | الحقل | النوع | الوصف |
 |-------|-------|-------|
-| `success` | bool | نجاح التحديث |
-| `configuration` | object | التهيئة المُطبّقة فعلاً |
+| `auto_clear` | bool | الحالة الجديدة |
 | `message` | string | رسالة تأكيد |
 
-#### أمثلة curl
+#### مثال curl
 
 ```bash
-# تفعيل المسح التلقائي مع تأخير 5 دقائق
+# تفعيل المسح التلقائي
 curl -X POST http://localhost:8080/api/queue/configure \
   -H "Content-Type: application/json" \
-  -d '{"auto_clear": true, "auto_clear_delay": 300}'
+  -d '{"auto_clear": true}'
 ```
 
 ```bash
@@ -491,49 +470,31 @@ curl -X POST http://localhost:8080/api/queue/configure \
 
 ### GET /api/queue/registry
 
-عرض جميع العمليات المسجلة في الطابور مع تفاصيلها الكاملة. يُستخدم لتفتيش حالة كل عملية ومراقبتها.
+عرض جميع العمليات المسجلة في سجلّ المشروع (التي بدأها المشروع عبر API). يُعرض فقط العمليات النشطة حالياً في الذاكرة.
 
-#### Query Parameters
-
-| الحقل | النوع | افتراضي | مطلوب؟ | الوصف |
-|-------|-------|---------|--------|-------|
-| `status` | string | null | لا | تصفية حسب الحالة: queued, processing, completed, failed |
-| `type` | string | null | لا | تصفية حسب النوع: image, video |
-| `limit` | int | `50` | لا | الحد الأقصى للنتائج |
-| `offset` | int | `0` | لا | بداية الصفحة (Pagination) |
-
-#### Response (QueueRegistryResponse)
+#### Response
 
 ```json
 {
-  "success": true,
-  "total": 12,
-  "limit": 50,
-  "offset": 0,
-  "operations": [
+  "count": 3,
+  "creations": [
     {
-      "creation_id": 3070624230,
-      "type": "image",
-      "status": "completed",
-      "owner": "system",
-      "prompt": "a golden dragon flying over mountains",
-      "model": "imagen-nano-banana-2",
-      "queued_at": "2025-01-15T10:30:00Z",
-      "started_at": "2025-01-15T10:30:05Z",
-      "completed_at": "2025-01-15T10:31:02Z",
-      "elapsed": 57.2
+      "identifier": "l7mHl6sgv9",
+      "metadata": {
+        "creation_id": 3071049939,
+        "tool": "text-to-image",
+        "model": "imagen-nano-banana-2"
+      },
+      "registered_at": "2026-05-31T03:25:00Z"
     },
     {
-      "creation_id": 3070643635,
-      "type": "video",
-      "status": "processing",
-      "owner": "user:alice",
-      "prompt": "eagle soaring over mountains at sunrise",
-      "model": "bytedance-seedance-pro-2.0",
-      "queued_at": "2025-01-15T10:32:00Z",
-      "started_at": "2025-01-15T10:32:03Z",
-      "completed_at": null,
-      "elapsed": 120.5
+      "identifier": "kP9xQm2nR4",
+      "metadata": {
+        "creation_id": 3071049940,
+        "tool": "video-generator",
+        "model": "bytedance-seedance-pro-2.0"
+      },
+      "registered_at": "2026-05-31T03:26:00Z"
     }
   ]
 }
@@ -541,37 +502,18 @@ curl -X POST http://localhost:8080/api/queue/configure \
 
 | الحقل | النوع | الوصف |
 |-------|-------|-------|
-| `success` | bool | نجاح الاستعلام |
-| `total` | int | إجمالي العمليات المطابقة |
-| `limit` | int | حد النتائج المُطبّق |
-| `offset` | int | إزاحة الصفحة |
-| `operations` | array | قائمة العمليات |
-| `operations[].creation_id` | int | معرف العملية |
-| `operations[].type` | string | نوع العملية (image/video) |
-| `operations[].status` | string | الحالة الحالية |
-| `operations[].owner` | string | مالك العملية |
-| `operations[].prompt` | string | النص المُستخدم |
-| `operations[].model` | string | النموذج المُستخدم |
-| `operations[].queued_at` | string | تاريخ الإضافة للطابور |
-| `operations[].started_at` | string\|null | تاريخ بدء المعالجة |
-| `operations[].completed_at` | string\|null | تاريخ الاكتمال |
-| `operations[].elapsed` | float\|null | الوقت المستغرق بالثواني |
+| `count` | int | عدد العمليات المسجلة حالياً |
+| `creations` | array | قائمة العمليات المسجلة |
+| `creations[].identifier` | string | معرّف العملية |
+| `creations[].metadata` | object | بيانات إضافية (creation_id، tool، model) |
+| `creations[].registered_at` | string | وقت التسجيل (ISO 8601) |
 
-#### أمثلة curl
+> **ملاحظة**: السجلّ في الذاكرة فقط (in-memory). عند إعادة تشغيل السيرفر، يُفرّغ تلقائياً وتُعامَل جميع العمليات كـ خارجية (safe default).
+
+#### مثال curl
 
 ```bash
-# عرض جميع العمليات
 curl http://localhost:8080/api/queue/registry
-```
-
-```bash
-# تصفية العمليات المعلقة فقط
-curl "http://localhost:8080/api/queue/registry?status=queued"
-```
-
-```bash
-# عرض فيديوهات قيد المعالجة مع pagination
-curl "http://localhost:8080/api/queue/registry?type=video&status=processing&limit=10&offset=0"
 ```
 
 ---
