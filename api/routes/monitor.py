@@ -13,9 +13,9 @@ from fastapi.responses import StreamingResponse
 
 from api.schemas.monitor_schemas import (
     MonitorHealthResponse,
-    PaginationParams,
+    MonitorStats,
+    QueueOverview,
 )
-from core.client import MagnificClient
 from core.monitor import MagnificMonitor
 from utils.logger import setup_logger
 
@@ -23,20 +23,18 @@ logger = setup_logger("monitor_routes")
 
 router = APIRouter(prefix="/api/monitor", tags=["Monitoring"])
 
-_client: MagnificClient | None = None
 _monitor: MagnificMonitor | None = None
 
 
-def set_deps(client: MagnificClient, monitor: MagnificMonitor):
+def set_deps(monitor: MagnificMonitor):
     """Inject dependencies (called during server lifespan)."""
-    global _client, _monitor
-    _client = client
+    global _monitor
     _monitor = monitor
 
 
-def _require_deps():
-    """Verify dependencies are available, raise 503 if not."""
-    if _monitor is None or _client is None:
+def _require_monitor():
+    """Verify monitor is available, raise 503 if not."""
+    if _monitor is None:
         raise HTTPException(
             status_code=503,
             detail="Monitor not available — server not fully initialized",
@@ -48,30 +46,28 @@ def _require_deps():
 # ---------------------------------------------------------------------------
 
 @router.get("/health", response_model=MonitorHealthResponse)
-async def monitor_health() -> dict:
+async def monitor_health():
     """Health check for the monitor subsystem."""
-    if _monitor is None or _client is None:
+    if _monitor is None:
         return MonitorHealthResponse(
             status="error",
             detail="Monitor not available — server not fully initialized",
-        ).model_dump()
+        )
 
-    return MonitorHealthResponse(
-        status="ok",
-    ).model_dump()
+    return MonitorHealthResponse(status="ok")
 
 
 # ---------------------------------------------------------------------------
 # GET /api/monitor/queue
 # ---------------------------------------------------------------------------
 
-@router.get("/queue")
-async def queue_status() -> dict:
+@router.get("/queue", response_model=QueueOverview)
+async def queue_status():
     """Current queue snapshot: queued + processing items.
 
     Returns counts, items with positions and expected times.
     """
-    _require_deps()
+    _require_monitor()
     return await asyncio.to_thread(_monitor.get_queue_status)
 
 
@@ -81,20 +77,23 @@ async def queue_status() -> dict:
 
 @router.get("/creations")
 async def list_creations(
-    status: str | None = Query(None, description="Filter: processing, queued, completed, failed, cancelled"),
+    status: str | None = Query(
+        None,
+        description="Filter: processing, queued, completed, failed, cancelled",
+        pattern=r"^(processing|queued|completed|failed|cancelled)$",
+    ),
     page: int = Query(1, ge=1, description="Page number"),
     per_page: int = Query(10, ge=1, le=50, description="Items per page (max 50)"),
-    sort: str = Query("-createdAt", description="Sort field"),
+    sort: str = Query("-createdAt", description="Sort field", pattern=r"^-?[a-zA-Z_]+$"),
 ) -> dict:
     """Paginated list of creations with optional status filter."""
-    _require_deps()
-    params = PaginationParams(page=page, per_page=per_page, sort=sort, status=status)
+    _require_monitor()
     return await asyncio.to_thread(
         _monitor.list_creations,
-        status=params.status,
-        page=params.page,
-        per_page=params.per_page,
-        sort=params.sort,
+        status=status,
+        page=page,
+        per_page=per_page,
+        sort=sort,
     )
 
 
@@ -105,7 +104,7 @@ async def list_creations(
 @router.get("/creations/{creation_id}")
 async def creation_detail(creation_id: str) -> dict:
     """Detailed view of a single creation."""
-    _require_deps()
+    _require_monitor()
     return await asyncio.to_thread(_monitor.get_creation, creation_id)
 
 
@@ -113,13 +112,13 @@ async def creation_detail(creation_id: str) -> dict:
 # GET /api/monitor/stats
 # ---------------------------------------------------------------------------
 
-@router.get("/stats")
-async def stats() -> dict:
+@router.get("/stats", response_model=MonitorStats)
+async def stats():
     """Aggregate statistics across all creation statuses.
 
     Returns counts per status, total, and timestamp.
     """
-    _require_deps()
+    _require_monitor()
     return await asyncio.to_thread(_monitor.get_stats)
 
 
@@ -128,14 +127,10 @@ async def stats() -> dict:
 # ---------------------------------------------------------------------------
 
 @router.get("/limits")
-async def limits() -> dict:
+async def limits():
     """Account limits and credit information."""
-    _require_deps()
-    try:
-        return await asyncio.to_thread(_monitor.get_limits)
-    except Exception as e:
-        logger.warning(f"Failed to fetch limits: {e}")
-        return {"status": "unavailable", "detail": str(e)}
+    _require_monitor()
+    return await asyncio.to_thread(_monitor.get_limits)
 
 
 # ---------------------------------------------------------------------------
@@ -146,35 +141,46 @@ async def limits() -> dict:
 async def stream_monitor() -> StreamingResponse:
     """SSE stream monitoring all active (processing + queued) creations.
 
-    Emits status change events and heartbeats every 15 seconds.
+    Emits status updates and heartbeats. Auto-terminates after 5 minutes
+    to prevent resource leaks from forgotten connections.
     """
-    _require_deps()
+    _require_monitor()
 
-    heartbeat_interval = 15
+    max_lifetime = 300  # 5 minutes max
     poll_interval = 5
+    heartbeat_interval = 15
 
     async def event_generator():
         """Generate SSE events by polling active creations."""
+        active: list[dict] = []
+        elapsed = 0.0
+        last_heartbeat = 0.0
+
         try:
-            while True:
+            while elapsed < max_lifetime:
+                loop_start = asyncio.get_event_loop().time()
+
                 try:
                     active = await asyncio.to_thread(_monitor.get_active_creations)
 
                     if active:
                         for creation in active:
                             yield f"event: status_update\ndata: {json.dumps(creation)}\n\n"
-                    else:
-                        yield f"event: heartbeat\ndata: {json.dumps({'active_count': 0, 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
 
                 except Exception as e:
                     logger.warning(f"Monitor stream poll error: {e}")
-                    yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+                    yield f"event: error\ndata: {json.dumps({'error': 'Failed to fetch active creations'})}\n\n"
 
                 await asyncio.sleep(poll_interval)
+                elapsed += asyncio.get_event_loop().time() - loop_start
 
-                # Heartbeat every 3rd poll cycle (~15 seconds)
-                yield f"event: heartbeat\ndata: {json.dumps({'active_count': len(active) if active else 0, 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
-                await asyncio.sleep(heartbeat_interval - poll_interval)
+                # Heartbeat every heartbeat_interval seconds
+                if elapsed - last_heartbeat >= heartbeat_interval:
+                    yield f"event: heartbeat\ndata: {json.dumps({'active_count': len(active), 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
+                    last_heartbeat = elapsed
+
+            # Final heartbeat before closing
+            yield f"event: heartbeat\ndata: {json.dumps({'active_count': len(active), 'timestamp': datetime.now(timezone.utc).isoformat(), 'closing': True})}\n\n"
 
         except asyncio.CancelledError:
             logger.info("Monitor SSE stream closed by client")

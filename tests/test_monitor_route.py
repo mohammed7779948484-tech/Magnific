@@ -10,7 +10,7 @@ Called Shots:
 7. test_monitor_stream_endpoint — GET /api/monitor/stream yields SSE events
 8. test_monitor_no_deps_503 — Returns 503 when deps not injected
 9. test_monitor_creations_pagination_validation — per_page > 50 returns 422
-10. test_monitor_invalid_status_filter — Invalid status returns 422
+10. test_monitor_routes_registered — All routes accessible via test app
 
 No unittest.mock usage. Tests use real FakeMonitor from tests.helpers.
 """
@@ -21,20 +21,30 @@ import pytest
 from starlette.testclient import TestClient
 
 from tests.helpers.fake_deps import FakeClient, FakeMonitor
-from tests.helpers.create_test_app import create_test_app
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _reset_monitor_deps():
+    """Auto-cleanup monitor module globals after every test."""
+    yield
+    import api.routes.monitor as m
+    m._monitor = None
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _setup_monitor_deps(queue_result=None, creations_result=None,
-                        detail_result=None, stats_result=None,
-                        limits_result=None, active_result=None):
+def _setup_monitor(queue_result=None, creations_result=None,
+                   detail_result=None, stats_result=None,
+                   limits_result=None, active_result=None):
     """Set up monitor module deps with FakeMonitor."""
     from api.routes import monitor as monitor_module
 
-    fake_client = FakeClient(xsrf_token="fake-token")
     fake_monitor = FakeMonitor()
 
     if queue_result is not None:
@@ -50,21 +60,13 @@ def _setup_monitor_deps(queue_result=None, creations_result=None,
     if active_result is not None:
         fake_monitor.active_creations_result = active_result
 
-    monitor_module.set_deps(fake_client, fake_monitor)
+    monitor_module.set_deps(fake_monitor)
     return monitor_module
-
-
-def _reset_monitor_deps():
-    """Clean up monitor module deps after test."""
-    from api.routes import monitor as monitor_module
-    monitor_module._client = None
-    monitor_module._monitor = None
 
 
 def _make_app_with_monitor():
     """Create test app with monitor routes registered."""
     from api.routes.monitor import router as monitor_router, set_deps as monitor_set_deps
-    from tests.helpers.fake_deps import FakeClient, FakeMonitor
 
     from contextlib import asynccontextmanager
     from fastapi import FastAPI
@@ -76,9 +78,8 @@ def _make_app_with_monitor():
     @asynccontextmanager
     async def test_lifespan(app: FastAPI):
         ModelRegistry.discover()
-        client = FakeClient(xsrf_token="fake-token")
         monitor = FakeMonitor()
-        monitor_set_deps(client, monitor)
+        monitor_set_deps(monitor)
         yield
 
     app = FastAPI(title="Test", lifespan=test_lifespan)
@@ -94,9 +95,10 @@ def _make_app_with_monitor():
 # Called Shot 1: GET /api/monitor/queue
 # ---------------------------------------------------------------------------
 
-def test_monitor_queue_endpoint():
+@pytest.mark.asyncio
+async def test_monitor_queue_endpoint():
     """GET /api/monitor/queue should return queue status from monitor."""
-    mod = _setup_monitor_deps(queue_result={
+    _setup_monitor(queue_result={
         "queued": 2,
         "processing": 1,
         "queued_items": [{"id": 101, "position": 1}],
@@ -106,49 +108,43 @@ def test_monitor_queue_endpoint():
     })
 
     from api.routes.monitor import queue_status
-    import asyncio
 
-    result = asyncio.get_event_loop().run_until_complete(queue_status())
+    result = await queue_status()
 
     assert result["queued"] == 2
     assert result["processing"] == 1
     assert result["total_active"] == 3
     assert len(result["queued_items"]) == 1
 
-    _reset_monitor_deps()
-
 
 # ---------------------------------------------------------------------------
 # Called Shot 2: GET /api/monitor/creations
 # ---------------------------------------------------------------------------
 
-def test_monitor_creations_endpoint():
+@pytest.mark.asyncio
+async def test_monitor_creations_endpoint():
     """GET /api/monitor/creations should pass filters to monitor."""
-    mod = _setup_monitor_deps(creations_result={
+    _setup_monitor(creations_result={
         "data": [{"id": 1, "status": "completed"}],
         "meta": {"total": 100, "current_page": 1, "last_page": 10, "per_page": 10},
     })
 
     from api.routes.monitor import list_creations
-    import asyncio
 
-    result = asyncio.get_event_loop().run_until_complete(
-        list_creations(status="completed", page=1, per_page=10, sort="-createdAt")
-    )
+    result = await list_creations(status="completed", page=1, per_page=10, sort="-createdAt")
 
     assert result["meta"]["total"] == 100
     assert len(result["data"]) == 1
-
-    _reset_monitor_deps()
 
 
 # ---------------------------------------------------------------------------
 # Called Shot 3: GET /api/monitor/creations/{id}
 # ---------------------------------------------------------------------------
 
-def test_monitor_creation_detail_endpoint():
+@pytest.mark.asyncio
+async def test_monitor_creation_detail_endpoint():
     """GET /api/monitor/creations/{id} should return creation detail."""
-    mod = _setup_monitor_deps(detail_result={
+    _setup_monitor(detail_result={
         "id": 42,
         "status": "completed",
         "tool": "text-to-image",
@@ -156,23 +152,21 @@ def test_monitor_creation_detail_endpoint():
     })
 
     from api.routes.monitor import creation_detail
-    import asyncio
 
-    result = asyncio.get_event_loop().run_until_complete(creation_detail("42"))
+    result = await creation_detail("42")
 
     assert result["id"] == 42
     assert result["status"] == "completed"
-
-    _reset_monitor_deps()
 
 
 # ---------------------------------------------------------------------------
 # Called Shot 4: GET /api/monitor/stats
 # ---------------------------------------------------------------------------
 
-def test_monitor_stats_endpoint():
+@pytest.mark.asyncio
+async def test_monitor_stats_endpoint():
     """GET /api/monitor/stats should return aggregate counts."""
-    mod = _setup_monitor_deps(stats_result={
+    _setup_monitor(stats_result={
         "counts": {
             "processing": 1, "queued": 3,
             "completed": 50, "failed": 2, "cancelled": 1,
@@ -182,55 +176,48 @@ def test_monitor_stats_endpoint():
     })
 
     from api.routes.monitor import stats
-    import asyncio
 
-    result = asyncio.get_event_loop().run_until_complete(stats())
+    result = await stats()
 
     assert result["total"] == 57
     assert result["counts"]["queued"] == 3
-
-    _reset_monitor_deps()
 
 
 # ---------------------------------------------------------------------------
 # Called Shot 5: GET /api/monitor/health
 # ---------------------------------------------------------------------------
 
-def test_monitor_health_endpoint():
+@pytest.mark.asyncio
+async def test_monitor_health_endpoint():
     """GET /api/monitor/health should return ok when deps available."""
-    _setup_monitor_deps()
+    _setup_monitor()
 
     from api.routes.monitor import monitor_health
-    import asyncio
 
-    result = asyncio.get_event_loop().run_until_complete(monitor_health())
+    result = await monitor_health()
 
-    assert result["status"] == "ok"
-
-    _reset_monitor_deps()
+    assert result.status == "ok"
 
 
 # ---------------------------------------------------------------------------
 # Called Shot 6: GET /api/monitor/limits
 # ---------------------------------------------------------------------------
 
-def test_monitor_limits_endpoint():
+@pytest.mark.asyncio
+async def test_monitor_limits_endpoint():
     """GET /api/monitor/limits should return account limits."""
-    mod = _setup_monitor_deps(limits_result={
+    _setup_monitor(limits_result={
         "credits": 500,
         "used": 120,
         "remaining": 380,
     })
 
     from api.routes.monitor import limits
-    import asyncio
 
-    result = asyncio.get_event_loop().run_until_complete(limits())
+    result = await limits()
 
     assert result["credits"] == 500
     assert result["remaining"] == 380
-
-    _reset_monitor_deps()
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +227,7 @@ def test_monitor_limits_endpoint():
 @pytest.mark.asyncio
 async def test_monitor_stream_endpoint():
     """GET /api/monitor/stream should yield SSE events."""
-    mod = _setup_monitor_deps(active_result=[
+    _setup_monitor(active_result=[
         {"id": 101, "status": "queued"},
         {"id": 202, "status": "processing"},
     ])
@@ -262,8 +249,6 @@ async def test_monitor_stream_endpoint():
     body = "".join(chunks)
     assert "data: " in body
 
-    _reset_monitor_deps()
-
 
 # ---------------------------------------------------------------------------
 # Called Shot 8: 503 when deps not injected
@@ -275,15 +260,12 @@ def test_monitor_no_deps_503():
 
     # Don't inject deps — they start as None
     from api.routes import monitor as monitor_module
-    monitor_module._client = None
     monitor_module._monitor = None
 
     client = TestClient(app, raise_server_exceptions=False)
     response = client.get("/api/monitor/queue")
 
     assert response.status_code == 503
-
-    _reset_monitor_deps()
 
 
 # ---------------------------------------------------------------------------
@@ -299,8 +281,6 @@ def test_monitor_creations_pagination_validation():
 
     assert response.status_code == 422
 
-    _reset_monitor_deps()
-
 
 # ---------------------------------------------------------------------------
 # Called Shot 10: Router registration
@@ -312,7 +292,7 @@ def test_monitor_routes_registered():
 
     client = TestClient(app, raise_server_exceptions=False)
 
-    # All 7 routes should exist (return 200 or 503, not 404)
+    # All routes should exist (return 200 or 503, not 404)
     routes = [
         "/api/monitor/health",
         "/api/monitor/queue",
@@ -323,5 +303,3 @@ def test_monitor_routes_registered():
     for route in routes:
         response = client.get(route)
         assert response.status_code != 404, f"Route {route} returned 404"
-
-    _reset_monitor_deps()

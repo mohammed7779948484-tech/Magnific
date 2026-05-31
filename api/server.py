@@ -92,7 +92,7 @@ def create_app(
         image_set_deps(_client, poller, uploader)
         video_set_deps(_client, poller, uploader)
         status_set_deps(_client, poller)
-        monitor_set_deps(_client, monitor)
+        monitor_set_deps(monitor)
 
         logger.info("Magnific API server ready")
 

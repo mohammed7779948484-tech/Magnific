@@ -5,8 +5,9 @@ and account limits. All methods delegate to MagnificClient.get().
 """
 
 from datetime import datetime, timezone
-from typing import Any
 
+from core.client import MagnificClient
+from core.exceptions import MagnificError
 from utils.logger import setup_logger
 
 logger = setup_logger("monitor")
@@ -22,13 +23,40 @@ class MagnificMonitor:
 
     VALID_STATUSES = ("processing", "queued", "completed", "failed", "cancelled")
 
-    def __init__(self, client: Any):
+    def __init__(self, client: MagnificClient):
         """Initialize with a MagnificClient instance.
 
         Args:
             client: MagnificClient used for all HTTP requests.
         """
         self.client = client
+
+    def _safe_get(self, path: str, params: dict | None = None) -> dict:
+        """Wrap client.get() with null-safety.
+
+        Returns empty dict on None response instead of crashing.
+        """
+        data = self.client.get(path, params=params)
+        if data is None:
+            logger.warning(f"API returned None for {path}")
+            return {}
+        return data
+
+    def _fetch_active(self) -> tuple[list[dict], list[dict]]:
+        """Fetch queued and processing creations. Shared base method.
+
+        Returns:
+            Tuple of (queued_items, processing_items).
+        """
+        queued_data = self._safe_get(
+            "/api/creations",
+            params={"status": "queued", "per_page": 50},
+        )
+        processing_data = self._safe_get(
+            "/api/creations",
+            params={"status": "processing", "per_page": 50},
+        )
+        return queued_data.get("data", []), processing_data.get("data", [])
 
     def get_queue_status(self) -> dict:
         """Fetch current queue snapshot: queued + processing items.
@@ -37,17 +65,10 @@ class MagnificMonitor:
             Dict with 'queued', 'processing', 'queued_items', 'processing_items',
             'total_active', and 'checked_at' keys.
         """
-        queued_data = self.client.get(
-            "/api/creations",
-            params={"status": "queued", "per_page": 50},
-        )
-        processing_data = self.client.get(
-            "/api/creations",
-            params={"status": "processing", "per_page": 50},
-        )
+        queued_items_raw, processing_items_raw = self._fetch_active()
 
         queued_items = []
-        for item in queued_data.get("data", []):
+        for item in queued_items_raw:
             meta = item.get("metadata", {})
             queued_items.append({
                 "id": item.get("id"),
@@ -62,7 +83,7 @@ class MagnificMonitor:
             })
 
         processing_items = []
-        for item in processing_data.get("data", []):
+        for item in processing_items_raw:
             meta = item.get("metadata", {})
             processing_items.append({
                 "id": item.get("id"),
@@ -101,7 +122,7 @@ class MagnificMonitor:
         Returns:
             Dict with 'data' (list of creations) and 'meta' (pagination info).
         """
-        params: dict[str, Any] = {
+        params: dict = {
             "per_page": min(per_page, 50),
             "page": page,
             "sort": sort,
@@ -109,7 +130,7 @@ class MagnificMonitor:
         if status:
             params["status"] = status
 
-        return self.client.get("/api/creations", params=params)
+        return self._safe_get("/api/creations", params=params)
 
     def get_creation(self, creation_id: str | int) -> dict:
         """Fetch detailed info for a single creation.
@@ -120,7 +141,7 @@ class MagnificMonitor:
         Returns:
             Dict with full creation details.
         """
-        return self.client.get(f"/api/creation/{creation_id}")
+        return self._safe_get(f"/api/creation/{creation_id}")
 
     def get_active_creations(self) -> list[dict]:
         """Get all currently active creations (processing + queued).
@@ -128,18 +149,10 @@ class MagnificMonitor:
         Returns:
             Combined list of processing and queued creation dicts.
         """
-        queued_data = self.client.get(
-            "/api/creations",
-            params={"status": "queued", "per_page": 50},
-        )
-        processing_data = self.client.get(
-            "/api/creations",
-            params={"status": "processing", "per_page": 50},
-        )
-
+        queued_items, processing_items = self._fetch_active()
         active = []
-        active.extend(queued_data.get("data", []))
-        active.extend(processing_data.get("data", []))
+        active.extend(queued_items)
+        active.extend(processing_items)
         return active
 
     def get_stats(self) -> dict:
@@ -152,7 +165,7 @@ class MagnificMonitor:
         total = 0
 
         for status in self.VALID_STATUSES:
-            resp = self.client.get(
+            resp = self._safe_get(
                 "/api/creations",
                 params={"status": status, "per_page": 1},
             )
@@ -172,4 +185,4 @@ class MagnificMonitor:
         Returns:
             Dict with account limit details from Magnific API.
         """
-        return self.client.get("/api/limits")
+        return self._safe_get("/api/limits")
