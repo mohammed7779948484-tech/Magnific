@@ -1,0 +1,112 @@
+{
+  "num_requests": 8,
+  "success": 8,
+  "fail": 0,
+  "total_time": 61.55526852607727,
+  "results": [
+    {
+      "success": true,
+      "creation_id": 3070934699,
+      "family": "a1e84fae-7371-48fd-8ee1-ea9f185c16b6",
+      "status": "completed",
+      "image_url": "https://pikaso.cdnpk.net/private/production/4455648452/render.png?token=exp=1780444800~hmac=bf3d2d360dab758751d8653702b1d700daa59b2af565fe242df6c2a0ae524668",
+      "image_base64": null,
+      "message": null,
+      "elapsed": 60.93523716926575,
+      "_req_id": 1,
+      "_elapsed": 60.93915629386902,
+      "_http_code": 200
+    },
+    {
+      "success": true,
+      "creation_id": 3070934704,
+      "family": "a1e84fae-b617-4b9f-b8be-1b0db23b3986",
+      "status": "completed",
+      "image_url": "https://pikaso.cdnpk.net/private/production/4455648348/render.png?token=exp=1780444800~hmac=516ced2c27a0ea45b374c4e5f82a257b5847f699d714459d9626929ea1abfd48",
+      "image_base64": null,
+      "message": null,
+      "elapsed": 60.753809690475464,
+      "_req_id": 2,
+      "_elapsed": 60.76056432723999,
+      "_http_code": 200
+    },
+    {
+      "success": true,
+      "creation_id": 3070934708,
+      "family": "a1e84fae-cc0b-411b-a907-b12c81c8f36c",
+      "status": "completed",
+      "image_url": "https://pikaso.cdnpk.net/private/production/4455648392/render.png?token=exp=1780444800~hmac=2c21cd39f39291ea845a6df0c037c334c66d6f01f27aa6c0953e7c619a559505",
+      "image_base64": null,
+      "message": null,
+      "elapsed": 60.69048857688904,
+      "_req_id": 3,
+      "_elapsed": 60.69833517074585,
+      "_http_code": 200
+    },
+    {
+      "success": true,
+      "creation_id": 3070934697,
+      "family": "a1e84fae-4c08-480d-a29f-134148d36d2f",
+      "status": "completed",
+      "image_url": "https://pikaso.cdnpk.net/private/production/4455648394/render.png?token=exp=1780444800~hmac=82f8e6322fdd17f047b7527a3c56cea67290358f9bb156326e2909d3ff362c69",
+      "image_base64": null,
+      "message": null,
+      "elapsed": 60.46691417694092,
+      "_req_id": 4,
+      "_elapsed": 60.47544455528259,
+      "_http_code": 200
+    },
+    {
+      "success": true,
+      "creation_id": 3070934719,
+      "family": "a1e84fae-d222-43f5-ab2b-b9b75307a795",
+      "status": "completed",
+      "image_url": "https://pikaso.cdnpk.net/private/production/4455648428/render.png?token=exp=1780444800~hmac=1242000a21afbc8869bcf8812f68a6c84e21ff743beb2b5746852be598b511bf",
+      "image_base64": null,
+      "message": null,
+      "elapsed": 61.07005023956299,
+      "_req_id": 5,
+      "_elapsed": 61.078959226608276,
+      "_http_code": 200
+    },
+    {
+      "success": true,
+      "creation_id": 3070934711,
+      "family": "a1e84fae-c83c-4506-86dd-0ad308ae1299",
+      "status": "completed",
+      "image_url": "https://pikaso.cdnpk.net/private/production/4455648404/render.png?token=exp=1780444800~hmac=330825bc03c55ef0c6ba687fa3803ce620db6a6388e84a5cda350121470e6989",
+      "image_base64": null,
+      "message": null,
+      "elapsed": 60.995497703552246,
+      "_req_id": 6,
+      "_elapsed": 61.006075620651245,
+      "_http_code": 200
+    },
+    {
+      "success": true,
+      "creation_id": 3070934715,
+      "family": "a1e84faf-1389-437e-b7fc-2fb0ae47b970",
+      "status": "completed",
+      "image_url": "https://pikaso.cdnpk.net/private/production/4455648177/render.png?token=exp=1780444800~hmac=9b401eec45c4b95b07217305b934de58c70fa15abc17aeb65acd4917b72f1aef",
+      "image_base64": null,
+      "message": null,
+      "elapsed": 55.790144205093384,
+      "_req_id": 7,
+      "_elapsed": 55.80116295814514,
+      "_http_code": 200
+    },
+    {
+      "success": true,
+      "creation_id": 3070934723,
+      "family": "a1e84faf-46c7-4803-a95c-2311b2e8a4b4",
+      "status": "completed",
+      "image_url": "https://pikaso.cdnpk.net/private/production/4455648468/render.png?token=exp=1780444800~hmac=9df9dbd909f0725bab0d2d9c7d6d1cfcea0df54f2e3060e857d163ec9850b466",
+      "image_base64": null,
+      "message": null,
+      "elapsed": 61.53589224815369,
+      "_req_id": 8,
+      "_elapsed": 61.548200845718384,
+      "_http_code": 200
+    }
+  ]
+}

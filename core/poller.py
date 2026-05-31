@@ -1,6 +1,8 @@
 """Polling engine for creation status and download."""
 
+import asyncio
 import time
+from collections.abc import AsyncGenerator
 from typing import Any, Generator
 
 from config.endpoints import Endpoints
@@ -122,6 +124,48 @@ class Poller:
                 return
 
             time.sleep(self.poll_interval)
+
+    async def async_poll_creation_stream(
+        self, creation_id: str | int, creation_type: str = "image"
+    ) -> AsyncGenerator[dict, None]:
+        """Async version of poll_creation_stream for SSE endpoints.
+
+        Uses asyncio.sleep instead of time.sleep to avoid blocking the event loop.
+        Yields status updates progressively — the caller can iterate this
+        in an async for loop without blocking.
+
+        Args:
+            creation_id: The creation ID to poll
+            creation_type: "image" or "video"
+
+        Yields:
+            Status update dicts with 'status' and optional 'progress' keys
+        """
+        start_time = time.time()
+
+        while True:
+            elapsed = time.time() - start_time
+
+            if elapsed > self.poll_timeout:
+                yield {"status": "timeout", "elapsed": elapsed}
+                return
+
+            try:
+                result = await asyncio.to_thread(
+                    self.client.get, f"/api/creation/{creation_id}"
+                )
+            except Exception as e:
+                yield {"status": "error", "message": str(e)}
+                await asyncio.sleep(self.poll_interval)
+                continue
+
+            status = result.get("status", "unknown")
+            yield {"status": status, "elapsed": elapsed, "data": result}
+
+            if status in ("completed", "failed"):
+                return
+
+            await asyncio.sleep(self.poll_interval)
 
     def poll_image_by_family(self, creation_id: str | int, family: str) -> dict:
         """Poll image creation via creations list (alternative method).

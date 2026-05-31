@@ -5,7 +5,7 @@ import base64 as _base64
 import time
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, HTTPException, Depends
 
 from api.schemas.image_schemas import ImageReferenceInput, ImageRequest, ImageResponse
 from config.endpoints import Endpoints
@@ -57,9 +57,12 @@ async def generate_image(request: ImageRequest) -> ImageResponse:
 
     Supports both simple generation (no references) and reference-based generation.
     """
-    assert _client is not None, "API not initialized"
-    assert _poller is not None, "Poller not initialized"
-    assert _uploader is not None, "Uploader not initialized"
+    if _client is None:
+        raise HTTPException(status_code=503, detail="API client not initialized. Server may still be starting up.")
+    if _poller is None:
+        raise HTTPException(status_code=503, detail="Poller not initialized.")
+    if _uploader is None:
+        raise HTTPException(status_code=503, detail="Uploader not initialized.")
 
     start_time = time.time()
 
@@ -78,7 +81,9 @@ async def generate_image(request: ImageRequest) -> ImageResponse:
         if ref.image_base64:
             b64 = ref.image_base64
         elif ref.image_path:
-            b64 = FileHelpers.file_to_base64(ref.image_path)
+            b64 = await asyncio.to_thread(
+                FileHelpers.file_to_base64, ref.image_path
+            )
         else:
             continue
 

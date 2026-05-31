@@ -36,8 +36,22 @@ def cmd_serve(args):
 
     logger.info(f"Starting Magnific API server on port {args.port}...")
 
+    # Parse cookies-dict if provided
+    cookies_dict = None
+    if args.cookies_dict:
+        cookies_dict = {}
+        for pair in args.cookies_dict.split(";"):
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                cookies_dict[k.strip()] = v.strip()
+
+    if not args.cookies and not cookies_dict:
+        logger.error("Either --cookies or --cookies-dict must be provided")
+        return
+
     app = create_app(
         cookies_file=args.cookies,
+        cookies_dict=cookies_dict,
         base_url=args.base_url,
         poll_interval=args.poll_interval,
         poll_timeout=args.poll_timeout,
@@ -360,7 +374,8 @@ def main():
 
     # ── Serve command ──────────────────────────────────────────────
     serve_parser = subparsers.add_parser("serve", help="Start local API server")
-    serve_parser.add_argument("--cookies", required=True, help="Path to cookies file")
+    serve_parser.add_argument("--cookies", default=None, help="Path to cookies file")
+    serve_parser.add_argument("--cookies-dict", default=None, help="Cookies as key=value pairs (e.g., name1=val1;name2=val2)")
     serve_parser.add_argument("--base-url", default=None, help="Base URL (default: magnific.com)")
     serve_parser.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
     serve_parser.add_argument("--port", type=int, default=8080, help="Port (default: 8080)")

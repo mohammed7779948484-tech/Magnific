@@ -5,16 +5,25 @@ Called Shots:
 2. test_generate_image_returns_error_on_no_request_token
 3. test_generate_image_returns_processing_when_wait_false
 4. test_generate_image_downloads_base64_when_download_true
-"""
 
-import asyncio
-import base64
-from unittest.mock import MagicMock, patch
+NO unittest.mock — uses real lightweight fakes from tests.helpers.fake_deps.
+"""
 
 import pytest
 
 from api.routes.image import generate_image, set_deps
 from api.schemas.image_schemas import ImageRequest
+from models.base import ModelRegistry
+from tests.helpers.fake_deps import (
+    FakeClient,
+    FakePoller,
+    FakeResponse,
+    FakeSession,
+    FakeUploader,
+)
+
+# Import cached module to get model instance for re-registration
+import models.image.nano_banana_2 as _nano_mod
 
 
 # ---------------------------------------------------------------------------
@@ -23,28 +32,21 @@ from api.schemas.image_schemas import ImageRequest
 
 @pytest.fixture(autouse=True)
 def _reset_module_deps():
-    """Ensure deps are set and torn down per test."""
-    mock_client = MagicMock()
-    mock_poller = MagicMock()
-    mock_uploader = MagicMock()
-    set_deps(mock_client, mock_poller, mock_uploader)
+    """Set lightweight fake deps before each test, tear down after."""
+    # Re-register image model if cleared by another test module
+    slug = "imagen-nano-banana-2"
+    if slug not in ModelRegistry._image_models:
+        ModelRegistry._image_models[slug] = _nano_mod.nano_banana_2
+
+    client = FakeClient(xsrf_token="fake-token")
+    poller = FakePoller()
+    uploader = FakeUploader()
+    set_deps(client, poller, uploader)
     yield
-    # Reset globals so no state leaks
     import api.routes.image as img_mod
     img_mod._client = None
     img_mod._poller = None
     img_mod._uploader = None
-
-
-@pytest.fixture(autouse=True)
-def _mock_registry():
-    """Patch ModelRegistry.get_image so no real models are needed."""
-    fake_model = MagicMock()
-    fake_model.build_start_tti_body.return_value = {"mode": "test", "prompt": "test"}
-    fake_model.build_render_body.return_value = {"tool": "text-to-image", "mode": "test"}
-    with patch("api.routes.image.ModelRegistry") as MockReg:
-        MockReg.get_image.return_value = fake_model
-        yield
 
 
 def _make_request(**overrides) -> ImageRequest:
@@ -58,11 +60,13 @@ def _make_request(**overrides) -> ImageRequest:
     return ImageRequest(**defaults)
 
 
-def _mock_response(status_code=200, content=b"fakeimg"):
-    resp = MagicMock()
-    resp.status_code = status_code
-    resp.content = content
-    return resp
+def _setup_success_responses(client: FakeClient, poller: FakePoller):
+    """Configure fake client + poller for a successful full pipeline."""
+    client.post_responses = [
+        {"request_tokens": ["tok123"], "family": "test"},
+        {"creation": {"id": "42"}},
+    ]
+    poller.poll_result = {"download_url": "https://example.com/img.png"}
 
 
 # ---------------------------------------------------------------------------
@@ -72,17 +76,9 @@ def _mock_response(status_code=200, content=b"fakeimg"):
 @pytest.mark.asyncio
 async def test_generate_image_returns_success_on_valid_input():
     """When client.post and poller return valid data, ImageResponse has success=True."""
-    from api.routes import image as img_mod
+    import api.routes.image as img_mod
 
-    # First call: start-tti-v2
-    # Second call: render/v4
-    img_mod._client.post.side_effect = [
-        {"request_tokens": ["tok123"], "family": "test"},
-        {"creation": {"id": "42"}},
-    ]
-    img_mod._poller.poll_creation.return_value = {
-        "download_url": "https://example.com/img.png"
-    }
+    _setup_success_responses(img_mod._client, img_mod._poller)
 
     request = _make_request(wait=True, download=False)
     response = await generate_image(request)
@@ -90,6 +86,8 @@ async def test_generate_image_returns_success_on_valid_input():
     assert response.success is True
     assert response.creation_id == "42"
     assert response.status == "completed"
+    assert response.image_url == "https://example.com/img.png"
+    assert response.elapsed is not None and response.elapsed >= 0
 
 
 # ---------------------------------------------------------------------------
@@ -99,18 +97,18 @@ async def test_generate_image_returns_success_on_valid_input():
 @pytest.mark.asyncio
 async def test_generate_image_returns_error_on_no_request_token():
     """When start-tti-v2 returns no request token, returns success=False."""
-    from api.routes import image as img_mod
+    import api.routes.image as img_mod
 
-    img_mod._client.post.return_value = {
-        "request_tokens": [None],
-        "family": "test",
-    }
+    img_mod._client.post_responses = [
+        {"request_tokens": [None], "family": "test"},
+    ]
 
     request = _make_request(wait=True)
     response = await generate_image(request)
 
     assert response.success is False
     assert response.status == "error"
+    assert "Failed to get request token" in (response.message or "")
 
 
 # ---------------------------------------------------------------------------
@@ -120,9 +118,9 @@ async def test_generate_image_returns_error_on_no_request_token():
 @pytest.mark.asyncio
 async def test_generate_image_returns_processing_when_wait_false():
     """When wait=False, returns immediately with status='processing'."""
-    from api.routes import image as img_mod
+    import api.routes.image as img_mod
 
-    img_mod._client.post.side_effect = [
+    img_mod._client.post_responses = [
         {"request_tokens": ["tok456"], "family": "test"},
         {"creation": {"id": "99"}},
     ]
@@ -131,7 +129,9 @@ async def test_generate_image_returns_processing_when_wait_false():
     response = await generate_image(request)
 
     assert response.status == "processing"
-    assert response.creation_id is not None
+    assert response.creation_id == "99"
+    assert response.success is True
+    assert response.family == "test"
 
 
 # ---------------------------------------------------------------------------
@@ -141,19 +141,22 @@ async def test_generate_image_returns_processing_when_wait_false():
 @pytest.mark.asyncio
 async def test_generate_image_downloads_base64_when_download_true():
     """When download=True and completed, image_base64 is populated."""
-    from api.routes import image as img_mod
+    import api.routes.image as img_mod
 
-    img_mod._client.post.side_effect = [
-        {"request_tokens": ["tok789"], "family": "test"},
-        {"creation": {"id": "55"}},
-    ]
-    img_mod._poller.poll_creation.return_value = {
-        "download_url": "https://example.com/img.png"
-    }
-    img_mod._client.session.get.return_value = _mock_response(status_code=200, content=b"fakeimg")
+    _setup_success_responses(img_mod._client, img_mod._poller)
+    # Configure session for download
+    img_mod._client.session = FakeSession(
+        get_response=FakeResponse(status_code=200, content=b"fakeimg")
+    )
 
     request = _make_request(wait=True, download=True)
     response = await generate_image(request)
 
     assert response.image_base64 is not None
-    assert response.image_base64.startswith("data:")
+    assert response.image_base64.startswith("data:image/png;base64,")
+    assert response.success is True
+    assert response.creation_id == "42"
+    # Verify the base64 content matches b"fakeimg"
+    import base64
+    payload = response.image_base64.split(",", 1)[1]
+    assert base64.b64decode(payload) == b"fakeimg"

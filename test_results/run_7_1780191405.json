@@ -1,0 +1,99 @@
+{
+  "num_requests": 7,
+  "success": 7,
+  "fail": 0,
+  "total_time": 61.21327519416809,
+  "results": [
+    {
+      "success": true,
+      "creation_id": 3070933426,
+      "family": "a1e84f47-9e3d-48ca-a9c9-f098a5da4776",
+      "status": "completed",
+      "image_url": "https://pikaso.cdnpk.net/private/production/4455646081/render.png?token=exp=1780444800~hmac=3c45b64c9db22d3851f3535f3c14f92f88bd0059ccfde96d6ce5de4ba7a9daa2",
+      "image_base64": null,
+      "message": null,
+      "elapsed": 60.994468688964844,
+      "_req_id": 1,
+      "_elapsed": 60.99821186065674,
+      "_http_code": 200
+    },
+    {
+      "success": true,
+      "creation_id": 3070933447,
+      "family": "a1e84f47-fb5e-4f2f-84f9-b04143f1e6b8",
+      "status": "completed",
+      "image_url": "https://pikaso.cdnpk.net/private/production/4455646079/render.png?token=exp=1780444800~hmac=ae29d167310ac0e20a04bab00756248900cc02a3828508ef4bb0a2c0542736de",
+      "image_base64": null,
+      "message": null,
+      "elapsed": 61.14008283615112,
+      "_req_id": 2,
+      "_elapsed": 61.146430253982544,
+      "_http_code": 200
+    },
+    {
+      "success": true,
+      "creation_id": 3070933438,
+      "family": "a1e84f47-d298-4f84-8a89-59c45ab47e9b",
+      "status": "completed",
+      "image_url": "https://pikaso.cdnpk.net/private/production/4455646169/render.png?token=exp=1780444800~hmac=5da0a4463232a3b2a9f1960d07489f31a82b08d1d8602435457d2a5cd52987df",
+      "image_base64": null,
+      "message": null,
+      "elapsed": 61.200228214263916,
+      "_req_id": 3,
+      "_elapsed": 61.20788812637329,
+      "_http_code": 200
+    },
+    {
+      "success": true,
+      "creation_id": 3070933440,
+      "family": "a1e84f48-02ed-4c36-81d7-e38798bb66fa",
+      "status": "completed",
+      "image_url": "https://pikaso.cdnpk.net/private/production/4455646130/render.png?token=exp=1780444800~hmac=e9a529f4885ce944c4b0b9a7f0a5c0ac56b188b84e189b699fc13b84ca4976a4",
+      "image_base64": null,
+      "message": null,
+      "elapsed": 61.02495193481445,
+      "_req_id": 4,
+      "_elapsed": 61.03298330307007,
+      "_http_code": 200
+    },
+    {
+      "success": true,
+      "creation_id": 3070933430,
+      "family": "a1e84f47-b742-4138-9683-f0b87a9d290f",
+      "status": "completed",
+      "image_url": "https://pikaso.cdnpk.net/private/production/4455645824/render.png?token=exp=1780444800~hmac=1909debbbed99b7d8d035409a9eed87a5cb828519f92400727cb6ce84ffc55de",
+      "image_base64": null,
+      "message": null,
+      "elapsed": 50.549548864364624,
+      "_req_id": 5,
+      "_elapsed": 50.55861830711365,
+      "_http_code": 200
+    },
+    {
+      "success": true,
+      "creation_id": 3070933435,
+      "family": "a1e84f47-c3e2-4168-a22b-f97eabe7b5da",
+      "status": "completed",
+      "image_url": "https://pikaso.cdnpk.net/private/production/4455646133/render.png?token=exp=1780444800~hmac=ec837c95f4afc1e2ec8754881c691ca9de1c2d8997a5133c64e2c4f44b913ea0",
+      "image_base64": null,
+      "message": null,
+      "elapsed": 61.032171964645386,
+      "_req_id": 6,
+      "_elapsed": 61.04190230369568,
+      "_http_code": 200
+    },
+    {
+      "success": true,
+      "creation_id": 3070933433,
+      "family": "a1e84f47-a4c2-4cdd-9647-30683c461c2f",
+      "status": "completed",
+      "image_url": "https://pikaso.cdnpk.net/private/production/4455646092/render.png?token=exp=1780444800~hmac=127b8cd60d9ba9c915d4089e6b5caaea5a2e97a0f3b0b1faa8ac87824bac7a0c",
+      "image_base64": null,
+      "message": null,
+      "elapsed": 61.02231431007385,
+      "_req_id": 7,
+      "_elapsed": 61.04295492172241,
+      "_http_code": 200
+    }
+  ]
+}

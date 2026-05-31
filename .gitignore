@@ -28,7 +28,13 @@ Thumbs.db
 # Downloads (generated outputs)
 downloads/
 
+# Environment variables (sensitive)
+.env
+.env.local
+
 # Cookies (sensitive - keep your own)
-*.txt
-!requirements.txt
+*_cookies.txt
+cookies*.txt
+*_magnific.txt
+pinj_magnific.txt
 !.env.example

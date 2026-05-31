@@ -110,9 +110,21 @@ def create_app(
     register_error_handlers(app)
 
     # CORS middleware — MUST be first (before rate limiter)
+    # Note: per CORS spec, allow_credentials=True requires specific origins (not "*")
+    # Starlette handles this by echoing the request Origin back when "*" is set,
+    # but we explicitly list localhost origins for correctness.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=[
+            "http://localhost:8080",
+            "http://127.0.0.1:8080",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:5000",
+            "http://127.0.0.1:5000",
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+        ],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

@@ -3,7 +3,7 @@
 import asyncio
 import json
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from api.schemas.common_schemas import HealthResponse, ModelsResponse, StatusResponse
@@ -42,12 +42,15 @@ async def check_status(
     type: str = Query("image", description="Creation type: image or video"),
 ):
     """Check the status of a creation (image or video)."""
-    assert _client is not None, "API not initialized"
+    if _client is None:
+        raise HTTPException(status_code=503, detail="API client not initialized. Server may still be starting up.")
 
     import time
     start = time.time()
 
-    result = _client.get(f"/api/creation/{creation_id}")
+    result = await asyncio.to_thread(
+        _client.get, f"/api/creation/{creation_id}"
+    )
     status = result.get("status", "unknown")
 
     url = None
@@ -89,11 +92,16 @@ async def stream_status(
     type: str = Query("image", description="Creation type: image or video"),
 ):
     """SSE endpoint for real-time creation status updates."""
-    assert _client is not None, "API not initialized"
+    if _client is None:
+        raise HTTPException(status_code=503, detail="API client not initialized. Server may still be starting up.")
+    if _poller is None:
+        raise HTTPException(status_code=503, detail="Poller not initialized.")
 
     async def event_generator():
         try:
-            for update in _poller.poll_creation_stream(creation_id, creation_type=type):
+            async for update in _poller.async_poll_creation_stream(
+                creation_id, creation_type=type
+            ):
                 yield f"data: {json.dumps(update)}\n\n"
 
                 if update.get("status") in ("completed", "failed", "timeout"):

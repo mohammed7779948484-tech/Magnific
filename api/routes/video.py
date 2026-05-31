@@ -3,7 +3,7 @@
 import asyncio
 import time
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from api.schemas.video_schemas import KeyframeInput, VideoReferenceInput, VideoRequest, VideoResponse
 from config.endpoints import Endpoints
@@ -34,16 +34,18 @@ def set_deps(client: MagnificClient, poller: Poller, uploader: Uploader):
 @retry_with_backoff(max_retries=3, initial_delay=15.0)
 def _post_video_generate(path: str, json_data: dict, headers: dict) -> dict:
     """POST to video generate endpoint with retry on rate-limit errors."""
-    assert _client is not None, "API not initialized"
-    return _client.post(path, json_data=json_data, headers=headers)
+    return _client.post(path, json_data=json_data, headers=headers)  # type: ignore[union-attr]
 
 
 @router.post("/generate", response_model=VideoResponse)
 async def generate_video(request: VideoRequest) -> VideoResponse:
     """Generate a video using the specified model."""
-    assert _client is not None, "API not initialized"
-    assert _poller is not None, "Poller not initialized"
-    assert _uploader is not None, "Uploader not initialized"
+    if _client is None:
+        raise HTTPException(status_code=503, detail="API client not initialized. Server may still be starting up.")
+    if _poller is None:
+        raise HTTPException(status_code=503, detail="Poller not initialized.")
+    if _uploader is None:
+        raise HTTPException(status_code=503, detail="Uploader not initialized.")
 
     start_time = time.time()
 
@@ -68,10 +70,14 @@ async def generate_video(request: VideoRequest) -> VideoResponse:
             # Local file — need to upload
             try:
                 if ref.type == "image":
-                    uploaded_url = _uploader.upload_reference_frame(file_path=ref.url)
+                    uploaded_url = await asyncio.to_thread(
+                        _uploader.upload_reference_frame, file_path=ref.url
+                    )
                     ref_dict["url"] = uploaded_url
                 elif ref.type in ("video", "audio"):
-                    result = _uploader.upload_video_audio(file_path=ref.url)
+                    result = await asyncio.to_thread(
+                        _uploader.upload_video_audio, file_path=ref.url
+                    )
                     uploaded_path = result.get("path", "")
                     ref_dict["url"] = f"temporal:{uploaded_path}" if uploaded_path else ref.url
                 refs.append(ref_dict)
