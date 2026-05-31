@@ -146,6 +146,75 @@ class FakePoller:
         return output_path
 
 
+class FakeMonitor:
+    """Lightweight real monitor that returns configured responses.
+
+    Usage:
+        monitor = FakeMonitor()
+        monitor.queue_status_result = {"queued": 2, "processing": 1, ...}
+        result = monitor.get_queue_status()
+    """
+
+    def __init__(self):
+        self.queue_status_result: dict[str, Any] = {
+            "queued": 0, "processing": 0,
+            "queued_items": [], "processing_items": [],
+            "total_active": 0, "checked_at": "",
+        }
+        self.list_creations_result: dict[str, Any] = {"data": [], "meta": {"total": 0}}
+        self.creation_detail_result: dict[str, Any] = {}
+        self.active_creations_result: list[dict] = []
+        self.stats_result: dict[str, Any] = {
+            "counts": {}, "total": 0, "checked_at": "",
+        }
+        self.limits_result: dict[str, Any] = {}
+        self.get_queue_status_calls: int = 0
+        self.list_creations_calls: int = 0
+        self.get_creation_calls: list[str | int] = []
+        self.get_active_creations_calls: int = 0
+        self.get_stats_calls: int = 0
+        self.get_limits_calls: int = 0
+
+    def get_queue_status(self) -> dict:
+        self.get_queue_status_calls += 1
+        return self.queue_status_result
+
+    def list_creations(self, status=None, page=1, per_page=10, sort="-createdAt") -> dict:
+        self.list_creations_calls += 1
+        return self.list_creations_result
+
+    def get_creation(self, creation_id: str | int) -> dict:
+        self.get_creation_calls.append(creation_id)
+        return self.creation_detail_result
+
+    def get_active_creations(self) -> list[dict]:
+        self.get_active_creations_calls += 1
+        return self.active_creations_result
+
+    def get_stats(self) -> dict:
+        self.get_stats_calls += 1
+        return self.stats_result
+
+    def get_limits(self) -> dict:
+        self.get_limits_calls += 1
+        return self.limits_result
+
+    async def async_get_queue_status(self) -> dict:
+        return self.get_queue_status()
+
+    async def async_list_creations(self, **kwargs) -> dict:
+        return self.list_creations(**kwargs)
+
+    async def async_get_creation(self, creation_id: str | int) -> dict:
+        return self.get_creation(creation_id)
+
+    async def async_get_stats(self) -> dict:
+        return self.get_stats()
+
+    async def async_get_limits(self) -> dict:
+        return self.get_limits()
+
+
 class FakeUploader:
     """Lightweight real uploader that returns configured responses.
 

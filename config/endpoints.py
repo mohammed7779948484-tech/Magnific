@@ -107,6 +107,9 @@ class Endpoints:
     VIDEO_AI_MODELS = "/api/video/ai-models"
     CUSTOM_MODELS = "/api/custom-models"
 
+    # ── Monitoring ────────────────────────────────────────────────
+    ACCOUNT_LIMITS = "/api/limits"
+
     # ── Extra Features ─────────────────────────────────────────────
     DESCRIBE_FRAMES = "/api/video/describe-frames"
     PROMPT_IMPROVEMENT = "/api/video/prompt-improvement"
