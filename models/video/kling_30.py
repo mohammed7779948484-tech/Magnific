@@ -1,17 +1,17 @@
 from models.base import BaseVideoModel
 
-kling_omni3 = BaseVideoModel(
-    slug="kling-omni3",
-    display_name="Kling 3.0 Omni",
+kling_30 = BaseVideoModel(
+    slug="kling-30",
+    display_name="Kling 3.0",
     api="kling",
     model="kling",
-    mode="omni3",
+    mode="30",
     family="kling",
     duration_range=(3, 15),
     aspect_ratios=["16:9", "9:16", "1:1"],
     resolutions=["720p", "1080p", "4K"],
-    max_image_refs=7,
-    max_video_refs=1,
+    max_image_refs=12,
+    max_video_refs=0,
     max_audio_refs=0,
     multishot_max=6,
     supports_sound=True,

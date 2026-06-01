@@ -6,7 +6,7 @@
 
 ## نظرة عامة
 
-المشروع يدعم حالياً **6 نماذج صور** و **9 نماذج فيديو**. جميع النماذج مسجلة تلقائياً في `ModelRegistry` عند تشغيل المشروع.
+المشروع يدعم حالياً **7 نماذج صور** و **11 نموذج فيديو**. جميع النماذج مسجلة تلقائياً في `ModelRegistry` عند تشغيل المشروع.
 
 لعرض القائمة في CLI:
 ```bash
@@ -35,6 +35,7 @@ GET /api/models
 | Google Imagen 4 | `google-imagen-4` | 75-150 | 1k, 2k, 4k | 14 |
 | GPT 1.5 High | `gpt-1-5-high` | 100-200 | 1k, 2k, 4k | 14 |
 | Flux 2 Pro | `flux-2-pro` | 50-175 | 1k, 2k, 4k | 14 |
+| GPT 2 | `gpt-2` | 25-2100 | 1k, 2k, 4k | 16 |
 | Seedream 5 Lite | `seedream-5-lite` | 50 | **1k فقط** | 14 |
 
 ---
@@ -154,6 +155,38 @@ python main.py image --cookies cookies.txt \
 
 ---
 
+### GPT 2
+
+**الملف**: `models/image/gpt_2.py`
+
+```
+Slug:          gpt-2
+Display:       GPT 2
+Credits:       25-2100
+Resolutions:   1k, 2k, 4k
+Max Refs:      16
+Max Prompt:     10000 حرف
+Num Images:     1-8 صور
+Quality:       low, medium, high
+Smart Prompt:   نعم (افتراضي)
+Seed:          مدعوم
+Color Palette: مدعوم (max 6 ألوان)
+Effects:       مدعوم
+Camera:        مدعوم
+Character:     مدعوم
+```
+
+**الوصف**: أحدث نموذج OpenAI GPT 2 للصور. أرخص نموذج (25 كريديت) مع أعلى حد صور مرجعية (16). يدعم 11 نسبة عرض/ارتفاع، توليد 1-8 صور، مستويات جودة، smart prompt، seed، effects، camera. الأفضل لـ text_layout, infographic, ui_design, diagram, typography.
+
+**مثال:**
+```bash
+python main.py image --cookies cookies.txt \
+  -p "a professional infographic about renewable energy, clean layout, charts and icons" \
+  -m gpt-2 --ratio 16:9 --res 4k
+```
+
+---
+
 ### Seedream 5 Lite
 
 **الملف**: `models/image/seedream_5_lite.py`
@@ -190,7 +223,9 @@ python main.py image --cookies cookies.txt \
 | Seedance 2.0 Fast | `bytedance-seedance-fast-2.0` | bytedance | 4-15s | 9 | 2 | 2 | 6 | نعم | start, end |
 | Seedance 1.5 Pro | `bytedance-seedance-pro-1.5` | bytedance | 4-15s | 0 | 0 | 2 | 3 | نعم | start |
 | Seedance 1.5 Lite | `bytedance-seedance-lite-1.5` | bytedance | 4-10s | 4 | 0 | 2 | 3 | نعم | start |
-| Kling Omni3 | `kling-omni3` | kling | 5-10s | 7 | 1 | 0 | 6 | لا | start, end |
+| Kling 3.0 | `kling-30` | kling | 3-15s | 12 | 0 | 0 | 6 | نعم | start, end |
+| Kling 3.0 MC | `kling-motion-control-30` | kling | 3-15s | 1 | 1 | 0 | 0 | لا | start, video |
+| Kling 3.0 Omni | `kling-omni3` | kling | 3-15s | 7 | 1 | 0 | 6 | نعم | start, end |
 | Kling O1 | `kling-omni1` | kling | 5-10s | 7 | 1 | 0 | 0 | لا | start, end |
 | Google Veo 3.1 | `google-veo3_1` | google | 8s ثابت | 3 | 0 | 0 | 0 | لا | start |
 | Runway Act Two | `runway-act-two` | runway | 5-10s | 2 | 0 | 0 | 0 | لا | start |
@@ -339,33 +374,106 @@ python main.py video --cookies cookies.txt \
 
 ---
 
-### Kling Omni3
+### Kling 3.0
+
+**الملف**: `models/video/kling_30.py`
+
+```
+Slug:          kling-30
+Display:       Kling 3.0
+API:           kling
+Model:         kling
+Mode:          30
+Family:        kling
+Duration:      3-15 ثواني
+Resolutions:   720p, 1080p, 4K
+Image Refs:    12
+Video Refs:    0
+Audio Refs:    0
+Multi-shot:    6 مشاهد
+Sound Effects: نعم
+Keyframes:     start, end
+FPS:           24
+Credits:       210-6000
+```
+
+**الوصف**: أحدث نموذج Kling 3.0. يدعم **4K** (أول نموذج Kling يدعمها)، مدة أوسع 3-15 ثانية، 12 صورة مرجعية (start frame + end frame + 3 character + 3 product + 3 advanced)، مؤثرات صوتية، multi-shot 6 مشاهد، و24 حركة كاميرا. نموذج beta/experimental.
+
+**مثال:**
+```bash
+python main.py video --cookies cookies.txt \
+  -p "a samurai standing in a field of red flowers, wind blowing" \
+  -m kling-30 --ratio 16:9 --duration 10 --resolution 4K --sound
+```
+
+---
+
+### Kling 3.0 Motion Control
+
+**الملف**: `models/video/kling_motion_control_30.py`
+
+```
+Slug:          kling-motion-control-30
+Display:       Kling 3.0 Motion Control
+API:           kling
+Model:         kling
+Mode:          motion-control-30
+Family:        kling
+Duration:      3-15 ثواني
+Resolutions:   720p, 1080p
+Image Refs:    1 (إلزامي - start frame)
+Video Refs:    1 (إلزامي - فيديو مرجعي)
+Audio Refs:    0
+Multi-shot:    0
+Sound Effects: لا
+Keyframes:     start, video (لا يدعم end)
+FPS:           24
+Credits:       330-2250
+```
+
+**الوصف**: نموذج خاص لتحكم الحركة. يتطلب **صورة start frame + فيديو مرجعي** (كلاهما إلزامي). يدعم motion control و lipsync. نسبة العرض/الارتفاع تُستنتج تلقائياً من الـ start frame. لا يدعم 4K أو multi-shot أو صوت.
+
+**ملاحظة مهمة**: هذا النموذج يختلف عن بقية النماذج — يجب توفير صورة وإطار فيديو كمُدخلات إلزامية.
+
+**مثال:**
+```bash
+python main.py video --cookies cookies.txt \
+  -p "slowly zoom into the character's face" \
+  -m kling-motion-control-30 --duration 8
+```
+
+---
+
+### Kling 3.0 Omni
 
 **الملف**: `models/video/kling_omni3.py`
 
 ```
 Slug:          kling-omni3
-Display:       Kling Omni3
+Display:       Kling 3.0 Omni
 API:           kling
 Model:         kling
 Mode:          omni3
 Family:        kling
-Duration:      5-10 ثواني
+Duration:      3-15 ثواني
+Resolutions:   720p, 1080p, 4K
 Image Refs:    7
 Video Refs:    1
 Audio Refs:    0
 Multi-shot:    6 مشاهد
-Sound Effects: لا
+Sound Effects: نعم
 Keyframes:     start, end
+FPS:           24
+Credits:       210-6000
 ```
 
-**الوصف**: نموذج Kling Omni3. يدعم 7 صور مرجعية + 1 فيديو مرجعي + multi-shot 6 مشاهد. لكن **لا يدعم صوت**.
+**الوصف**: نموذج Kling 3.0 Omni. يدعم 7 صور مرجعية + 1 فيديو مرجعي + multi-shot 6 مشاهد + مؤثرات صوتية + دقة 4K. يدعم أيضاً lipsync. أفضل لـ realistic_videos, character_animation, scene_transitions.
 
 **مثال:**
 ```bash
 python main.py video --cookies cookies.txt \
   -p "a warrior charging into battle with a sword" \
-  -m kling-omni3 --ratio 16:9 --duration 8
+  -m kling-omni3 --ratio 16:9 --duration 10 --resolution 4K --sound
 ```
 
 ---
@@ -509,7 +617,7 @@ python main.py video --cookies cookies.txt \
 | `2:3` | 832×1216 | 1664×2432 | 3328×4864 |
 | `21:9` | 1536×640 | 3072×1280 | 6144×2560 |
 
-> **ملاحظة**: نماذج الفيديو تدعم فقط 1080p, 720p, 480p (وليس 1k/2k/4k).
+> **ملاحظة**: نماذج الفيديو تدعم 720p, 1080p, 4K (النماذج الجديدة تدعم 4K).
 
 ---
 
@@ -528,6 +636,7 @@ python main.py video --cookies cookies.txt \
 ## كيف تختار النموذج المناسب؟
 
 ### للصور:
+- **أرخص + مرونة عالية**: `gpt-2` (25-2100 credits, 16 refs, smart prompt)
 - **سرعة + اقتصاد**: `seedream-5-lite` (50 credit, 1k فقط)
 - **توازن جودة/سعر**: `imagen-nano-banana-2` أو `google-imagen-4` (75-150 credits)
 - **أعلى جودة**: `imagen-nano-banana-pro` أو `gpt-1-5-high` (100-200 credits)
@@ -536,7 +645,9 @@ python main.py video --cookies cookies.txt \
 ### للفيديو:
 - **أقوى نموذج (كل المميزات)**: `bytedance-seedance-pro-2.0`
 - **سرعة + كل المميزات**: `bytedance-seedance-fast-2.0`
+- **أحدث Kling (4K + صوت + 12 refs)**: `kling-30`
+- **تحكم حركة + lipsync**: `kling-motion-control-30`
+- **كثير صور مرجعية + فيديو ref + 4K**: `kling-omni3`
 - **صوت مطلوب بدون refs**: `bytedance-seedance-pro-1.5`
-- **كثير صور مرجعية + فيديو ref**: `kling-omni3`
 - **مدة ثابتة 8s**: `google-veo3_1`
 - **بسيط وسريع**: `runway-act-two`
