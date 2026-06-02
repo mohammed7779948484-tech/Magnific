@@ -14,6 +14,7 @@ from api.routes.monitor import router as monitor_router, set_deps as monitor_set
 from api.routes.queue import router as queue_router, set_deps as queue_set_deps
 from api.routes.status import router as status_router, set_deps as status_set_deps
 from api.routes.video import router as video_router, set_deps as video_set_deps
+from api.routes.assets import router as assets_router, set_deps as assets_set_deps
 from core.auth import Authenticator
 from core.client import MagnificClient
 from core.creation_registry import CreationRegistry
@@ -21,6 +22,8 @@ from core.monitor import MagnificMonitor
 from core.poller import Poller
 from core.queue_manager import QueueManager
 from core.uploader import Uploader
+from core.cloudinary_service import CloudinaryService
+from core.asset_registry import AssetRegistry
 from models.base import ModelRegistry
 from utils.logger import setup_logger
 from utils.cookie_parser import CookieParser
@@ -38,6 +41,12 @@ def create_app(
     poll_interval: int = 5,
     poll_timeout: int = 180,
     rate_limit: int = 20,
+    cloudinary_cloud_name: str | None = None,
+    cloudinary_api_key: str | None = None,
+    cloudinary_api_secret: str | None = None,
+    cloudinary_folder: str = "magnific",
+    cloudinary_enabled: bool = True,
+    data_dir: str = "data",
 ) -> FastAPI:
     """Create and configure the FastAPI application.
 
@@ -48,6 +57,12 @@ def create_app(
         poll_interval: Seconds between status polls
         poll_timeout: Max seconds to wait for generation
         rate_limit: Max requests per minute per client
+        cloudinary_cloud_name: Cloudinary cloud name
+        cloudinary_api_key: Cloudinary API key
+        cloudinary_api_secret: Cloudinary API secret
+        cloudinary_folder: Root folder for uploads (default: "magnific")
+        cloudinary_enabled: Whether cloud storage is active (default: True)
+        data_dir: Directory for asset registry JSON (default: "data")
 
     Returns:
         Configured FastAPI app
@@ -93,14 +108,39 @@ def create_app(
         creation_registry = CreationRegistry()
         queue_manager = QueueManager(_client, creation_registry, enabled=False)
 
+        # Initialize Cloudinary service (optional — gracefully disabled if not configured)
+        cloudinary_service = None
+        try:
+            if cloudinary_enabled and cloudinary_cloud_name and cloudinary_api_key and cloudinary_api_secret:
+                cloudinary_service = CloudinaryService(
+                    cloud_name=cloudinary_cloud_name,
+                    api_key=cloudinary_api_key,
+                    api_secret=cloudinary_api_secret,
+                    folder=cloudinary_folder,
+                    enabled=True,
+                )
+            else:
+                cloudinary_service = CloudinaryService(enabled=False)
+                logger.info("Cloudinary: disabled (no credentials provided)")
+        except Exception as e:
+            logger.warning(f"Cloudinary initialization failed (non-fatal): {e}")
+            cloudinary_service = CloudinaryService(enabled=False)
+
+        # Initialize asset registry (always available)
+        asset_registry = AssetRegistry(data_dir=data_dir)
+        logger.info(f"Asset registry initialized at {data_dir}/assets.json")
+
         # Inject into route modules
         image_set_deps(_client, poller, uploader,
-                       queue_manager=queue_manager, creation_registry=creation_registry)
+                       queue_manager=queue_manager, creation_registry=creation_registry,
+                       cloudinary_service=cloudinary_service, asset_registry=asset_registry)
         video_set_deps(_client, poller, uploader,
-                       queue_manager=queue_manager, creation_registry=creation_registry)
+                       queue_manager=queue_manager, creation_registry=creation_registry,
+                       cloudinary_service=cloudinary_service, asset_registry=asset_registry)
         status_set_deps(_client, poller)
         monitor_set_deps(monitor)
         queue_set_deps(queue_manager, creation_registry)
+        assets_set_deps(cloudinary_service=cloudinary_service, asset_registry=asset_registry)
 
         logger.info("Magnific API server ready")
 
@@ -151,6 +191,7 @@ def create_app(
     app.include_router(status_router)
     app.include_router(monitor_router)
     app.include_router(queue_router)
+    app.include_router(assets_router)
 
     # Static files — serve generated downloads
     downloads_dir = os.path.join(os.path.dirname(__file__), "..", "downloads")

@@ -27,17 +27,23 @@ _poller: Poller | None = None
 _uploader: Uploader | None = None
 _queue_manager: Any = None  # Optional: QueueManager for smart queue clearing
 _registry: Any = None  # Optional: CreationRegistry for tracking our creations
+_cloudinary_service: Any = None  # Optional: CloudinaryService for cloud storage
+_asset_registry: Any = None  # Optional: AssetRegistry for tracking stored assets
 
 
 def set_deps(client: MagnificClient, poller: Poller, uploader: Uploader,
-             queue_manager=None, creation_registry=None):
+             queue_manager=None, creation_registry=None,
+             cloudinary_service=None, asset_registry=None):
     """Set shared dependencies from the server."""
     global _client, _poller, _uploader, _queue_manager, _registry
+    global _cloudinary_service, _asset_registry
     _client = client
     _poller = poller
     _uploader = uploader
     _queue_manager = queue_manager
     _registry = creation_registry
+    _cloudinary_service = cloudinary_service
+    _asset_registry = asset_registry
 
 
 # ── Sync wrappers with retry — run via asyncio.to_thread to avoid blocking ──
@@ -56,11 +62,124 @@ _post_with_retry = retry_with_backoff(max_retries=3, initial_delay=10.0)(_do_pos
 _poll_with_retry = retry_with_backoff(max_retries=3, initial_delay=10.0)(_do_poll)
 
 
+def _resolve_reference_base64(ref: ImageReferenceInput) -> str | None:
+    """Resolve a reference to base64 data URI.
+
+    Supports:
+        1. image_base64 — direct base64 data URI
+        2. image_path — local file path → convert to base64
+        3. Cloudinary URL (image_base64 field) — download from cloud → convert to base64
+
+    Returns:
+        Base64 data URI string, or None if cannot resolve
+    """
+    if ref.image_base64:
+        # Check if it's a Cloudinary URL (reusable reference)
+        if (_cloudinary_service
+                and _cloudinary_service.is_enabled()
+                and _cloudinary_service.is_cloudinary_url(ref.image_base64)):
+            try:
+                public_id = CloudinaryService.extract_public_id_from_url(ref.image_base64)
+                if public_id:
+                    mime = "image/png"  # Default MIME
+                    b64 = _cloudinary_service.download_as_base64(public_id, mime_type=mime)
+                    logger.info(f"Resolved Cloudinary reference: {public_id}")
+
+                    # Track usage in registry
+                    if _asset_registry:
+                        record = _asset_registry.get_by_cloudinary_url(ref.image_base64)
+                        if record:
+                            _asset_registry.mark_used(record.id)
+
+                    return b64
+            except Exception as e:
+                logger.warning(f"Failed to resolve Cloudinary URL as reference: {e}")
+                return ref.image_base64
+
+        return ref.image_base64
+
+    if ref.image_path:
+        try:
+            return FileHelpers.file_to_base64(ref.image_path)
+        except Exception as e:
+            logger.error(f"Failed to read reference file: {e}")
+            return None
+
+    return None
+
+
+def _upload_to_cloud(
+    creation_id: str,
+    model_slug: str,
+    download_url: str,
+    prompt: str,
+) -> dict | None:
+    """Upload a generated image to Cloudinary cloud storage.
+
+    Called after generation completes to persist the result in the cloud.
+    Also registers the asset in the local registry for future reference reuse.
+
+    Args:
+        creation_id: Magnific creation ID
+        model_slug: Model slug used
+        download_url: CDN URL of the generated image
+        prompt: The prompt used for generation
+
+    Returns:
+        Dict with cloudinary_url and public_id, or None if upload disabled/failed
+    """
+    if not _cloudinary_service or not _cloudinary_service.is_enabled():
+        return None
+
+    try:
+        public_id = _cloudinary_service.build_public_id(
+            asset_type="image",
+            model_slug=model_slug,
+            creation_id=str(creation_id),
+        )
+
+        result = _cloudinary_service.upload_from_url(
+            url=download_url,
+            public_id=public_id,
+            resource_type="image",
+        )
+
+        cloudinary_url = result.get("url", "")
+
+        # Register in asset registry
+        if _asset_registry and cloudinary_url:
+            _asset_registry.register(
+                asset_type="image",
+                model=model_slug,
+                creation_id=str(creation_id),
+                public_id=result.get("public_id", public_id),
+                cloudinary_url=cloudinary_url,
+                original_url=download_url,
+                resource_type="image",
+                bytes=result.get("bytes", 0),
+                width=result.get("width"),
+                height=result.get("height"),
+                format=result.get("format", "png"),
+                prompt=prompt,
+            )
+            logger.info(f"Image stored in cloud: {cloudinary_url}")
+
+        return {
+            "cloudinary_url": cloudinary_url,
+            "public_id": result.get("public_id", public_id),
+        }
+    except Exception as e:
+        logger.warning(f"Cloud upload failed (non-fatal): {e}")
+        return None
+
+
 @router.post("/generate", response_model=ImageResponse)
 async def generate_image(request: ImageRequest) -> ImageResponse:
     """Generate an image using the specified model.
 
     Supports both simple generation (no references) and reference-based generation.
+    Generated images are automatically uploaded to Cloudinary cloud storage
+    for persistence and reuse as future references.
     """
     if _client is None:
         raise HTTPException(status_code=503, detail="API client not initialized. Server may still be starting up.")
@@ -90,13 +209,8 @@ async def generate_image(request: ImageRequest) -> ImageResponse:
     render_refs = []    # For render/v4
 
     for ref in request.references:
-        if ref.image_base64:
-            b64 = ref.image_base64
-        elif ref.image_path:
-            b64 = await asyncio.to_thread(
-                FileHelpers.file_to_base64, ref.image_path
-            )
-        else:
+        b64 = _resolve_reference_base64(ref)
+        if not b64:
             continue
 
         # Upload to temporal storage for start-tti-v2
@@ -233,5 +347,20 @@ async def generate_image(request: ImageRequest) -> ImageResponse:
                 response.image_base64 = f"data:image/png;base64,{b64_data}"
         except Exception as e:
             logger.warning(f"Download for base64 failed: {e}")
+
+    # ★ Step 5: Upload to Cloudinary cloud storage (async, non-blocking)
+    if download_url and response.success:
+        try:
+            cloud_result = await asyncio.to_thread(
+                _upload_to_cloud,
+                creation_id,
+                request.model,
+                download_url,
+                request.prompt,
+            )
+            if cloud_result:
+                response.cloudinary_url = cloud_result.get("cloudinary_url")
+        except Exception as e:
+            logger.warning(f"Cloud upload post-generation failed (non-fatal): {e}")
 
     return response

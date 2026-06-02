@@ -61,5 +61,6 @@ class ImageResponse(BaseModel):
     status: str = "processing"
     image_url: str | None = None
     image_base64: str | None = None
+    cloudinary_url: str | None = Field(None, description="Cloudinary URL if cloud storage is enabled")
     message: str | None = None
     elapsed: float | None = None

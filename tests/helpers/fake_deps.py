@@ -345,3 +345,166 @@ class FakeCreationRegistry:
 
     def clear(self) -> None:
         self._ours.clear()
+
+
+class FakeCloudinaryService:
+    """Lightweight real Cloudinary test double — NOT a mock.
+
+    Records calls and returns configurable responses.
+    Disabled by default (is_enabled=False).
+
+    Usage:
+        svc = FakeCloudinaryService(enabled=True)
+        svc.upload_result = {"url": "https://cloudinary.com/test/image.png", ...}
+        result = svc.upload_from_url("https://cdn.example.com/img.png", "test/id")
+    """
+
+    def __init__(self, enabled: bool = False):
+        self._enabled = enabled
+        self.folder = "magnific-test"
+        self.upload_from_url_result: dict[str, Any] = {
+            "url": "https://res.cloudinary.com/test/magnific/image/model/id.png",
+            "public_id": "magnific/image/model/id",
+            "resource_type": "image",
+            "bytes": 102400,
+            "width": 1024,
+            "height": 1024,
+            "format": "png",
+        }
+        self.upload_from_bytes_result: dict[str, Any] = {}
+        self.download_bytes_result: bytes = b"fake-image-data"
+        self.download_as_base64_result: str = "data:image/png;base64,ZmFrZQ=="
+        self.delete_result: dict[str, Any] = {"result": "ok", "public_id": ""}
+        self.list_resources_result: dict[str, Any] = {"resources": [], "total": 0}
+        self.upload_calls: list[dict] = []
+        self.download_calls: list[str] = []
+        self.delete_calls: list[dict] = []
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    def is_enabled(self) -> bool:
+        return self._enabled
+
+    def build_public_id(self, asset_type: str, model_slug: str,
+                       creation_id: str, index: int = 0) -> str:
+        return f"magnific-test/{asset_type}/{model_slug}/{creation_id}_{index}"
+
+    def upload_from_url(self, url: str, public_id: str,
+                        resource_type: str = "auto") -> dict:
+        self.upload_calls.append({
+            "method": "upload_from_url", "url": url,
+            "public_id": public_id, "resource_type": resource_type,
+        })
+        return self.upload_from_url_result
+
+    def upload_from_bytes(self, data: bytes, public_id: str,
+                         resource_type: str = "auto",
+                         filename: str = "asset") -> dict:
+        self.upload_calls.append({
+            "method": "upload_from_bytes", "bytes": len(data),
+            "public_id": public_id, "resource_type": resource_type,
+        })
+        return self.upload_from_bytes_result or self.upload_from_url_result
+
+    def download_bytes(self, public_id: str) -> bytes:
+        self.download_calls.append(public_id)
+        return self.download_bytes_result
+
+    def download_as_base64(self, public_id: str,
+                          mime_type: str = "image/png") -> str:
+        self.download_calls.append(public_id)
+        return self.download_as_base64_result
+
+    def delete(self, public_id: str, resource_type: str = "auto") -> dict:
+        self.delete_calls.append({"public_id": public_id, "resource_type": resource_type})
+        return self.delete_result
+
+    def list_resources(self, prefix: str = "", resource_type: str = "image",
+                      max_results: int = 30,
+                      next_cursor: str | None = None) -> dict:
+        return self.list_resources_result
+
+    def is_cloudinary_url(self, url: str) -> bool:
+        return "cloudinary.com" in (url or "")
+
+    @staticmethod
+    def extract_public_id_from_url(url: str) -> str | None:
+        if not url or "cloudinary.com" not in url:
+            return None
+        parts = url.split("/upload/")
+        if len(parts) > 1:
+            return parts[-1].rsplit(".", 1)[0]
+        return None
+
+
+class FakeAssetRegistry:
+    """Lightweight real asset registry that records calls in-memory."""
+
+    def __init__(self):
+        self._assets: dict[str, Any] = {}
+        self._id_counter = 0
+        self.register_calls: list[dict] = []
+        self.mark_used_calls: list[str] = []
+        self.delete_calls: list[str] = []
+
+    def register(self, **kwargs) -> Any:
+        self._id_counter += 1
+        asset_id = f"asset_{self._id_counter:06d}"
+        record = type("Record", (), {
+            "id": asset_id,
+            **kwargs,
+            "use_count": 0,
+            "last_used_at": "",
+            "to_dict": lambda: {**kwargs, "id": asset_id, "use_count": 0},
+        })
+        self._assets[asset_id] = record
+        self.register_calls.append({"id": asset_id, **kwargs})
+        return record
+
+    def get(self, asset_id: str) -> Any:
+        return self._assets.get(asset_id)
+
+    def get_by_creation_id(self, creation_id: str) -> list:
+        return [r for r in self._assets.values() if r.creation_id == creation_id]
+
+    def get_by_cloudinary_url(self, url: str) -> Any:
+        for r in self._assets.values():
+            if getattr(r, "cloudinary_url", None) == url:
+                return r
+        return None
+
+    def list_assets(self, **kwargs) -> list:
+        return list(self._assets.values())
+
+    def mark_used(self, asset_id: str) -> bool:
+        self.mark_used_calls.append(asset_id)
+        record = self._assets.get(asset_id)
+        if record:
+            record.use_count = getattr(record, "use_count", 0) + 1
+            return True
+        return False
+
+    def delete(self, asset_id: str) -> bool:
+        self.delete_calls.append(asset_id)
+        if asset_id in self._assets:
+            del self._assets[asset_id]
+            return True
+        return False
+
+    def count(self, asset_type: str | None = None) -> int:
+        if asset_type:
+            return sum(1 for r in self._assets.values() if getattr(r, "asset_type", None) == asset_type)
+        return len(self._assets)
+
+    def stats(self) -> dict:
+        return {
+            "total": len(self._assets),
+            "images": sum(1 for r in self._assets.values() if getattr(r, "asset_type", None) == "image"),
+            "videos": sum(1 for r in self._assets.values() if getattr(r, "asset_type", None) == "video"),
+            "total_bytes": sum(getattr(r, "bytes", 0) for r in self._assets.values()),
+            "total_bytes_human": "1.0 MB",
+            "total_uses": sum(getattr(r, "use_count", 0) for r in self._assets.values()),
+            "model_breakdown": {},
+        }

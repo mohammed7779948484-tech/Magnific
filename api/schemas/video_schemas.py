@@ -93,5 +93,6 @@ class VideoResponse(BaseModel):
     status: str = "processing"
     video_url: str | None = None
     video_base64: str | None = None
+    cloudinary_url: str | None = Field(None, description="Cloudinary URL if cloud storage is enabled")
     message: str | None = None
     elapsed: float | None = None

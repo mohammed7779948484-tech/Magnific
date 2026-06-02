@@ -25,16 +25,22 @@ _poller: Poller | None = None
 _uploader: Uploader | None = None
 _queue_manager: Any = None  # Optional: QueueManager for smart queue clearing
 _registry: Any = None  # Optional: CreationRegistry for tracking our creations
+_cloudinary_service: Any = None  # Optional: CloudinaryService for cloud storage
+_asset_registry: Any = None  # Optional: AssetRegistry for tracking stored assets
 
 
 def set_deps(client: MagnificClient, poller: Poller, uploader: Uploader,
-             queue_manager=None, creation_registry=None):
+             queue_manager=None, creation_registry=None,
+             cloudinary_service=None, asset_registry=None):
     global _client, _poller, _uploader, _queue_manager, _registry
+    global _cloudinary_service, _asset_registry
     _client = client
     _poller = poller
     _uploader = uploader
     _queue_manager = queue_manager
     _registry = creation_registry
+    _cloudinary_service = cloudinary_service
+    _asset_registry = asset_registry
 
 
 @retry_with_backoff(max_retries=3, initial_delay=15.0)
@@ -43,9 +49,78 @@ def _post_video_generate(path: str, json_data: dict, headers: dict) -> dict:
     return _client.post(path, json_data=json_data, headers=headers)  # type: ignore[union-attr]
 
 
+def _upload_to_cloud(
+    creation_id: str,
+    model_slug: str,
+    download_url: str,
+    prompt: str,
+) -> dict | None:
+    """Upload a generated video to Cloudinary cloud storage.
+
+    Called after generation completes to persist the result in the cloud.
+    Also registers the asset in the local registry for future reference reuse.
+
+    Args:
+        creation_id: Magnific creation ID
+        model_slug: Model slug used
+        download_url: CDN URL of the generated video
+        prompt: The prompt used for generation
+
+    Returns:
+        Dict with cloudinary_url and public_id, or None if upload disabled/failed
+    """
+    if not _cloudinary_service or not _cloudinary_service.is_enabled():
+        return None
+
+    try:
+        public_id = _cloudinary_service.build_public_id(
+            asset_type="video",
+            model_slug=model_slug,
+            creation_id=str(creation_id),
+        )
+
+        result = _cloudinary_service.upload_from_url(
+            url=download_url,
+            public_id=public_id,
+            resource_type="video",
+        )
+
+        cloudinary_url = result.get("url", "")
+
+        # Register in asset registry
+        if _asset_registry and cloudinary_url:
+            _asset_registry.register(
+                asset_type="video",
+                model=model_slug,
+                creation_id=str(creation_id),
+                public_id=result.get("public_id", public_id),
+                cloudinary_url=cloudinary_url,
+                original_url=download_url,
+                resource_type="video",
+                bytes=result.get("bytes", 0),
+                duration=result.get("duration"),
+                format=result.get("format", "mp4"),
+                prompt=prompt,
+            )
+            logger.info(f"Video stored in cloud: {cloudinary_url}")
+
+        return {
+            "cloudinary_url": cloudinary_url,
+            "public_id": result.get("public_id", public_id),
+        }
+    except Exception as e:
+        logger.warning(f"Cloud upload failed (non-fatal): {e}")
+        return None
+
+
 @router.post("/generate", response_model=VideoResponse)
 async def generate_video(request: VideoRequest) -> VideoResponse:
-    """Generate a video using the specified model."""
+    """Generate a video using the specified model.
+
+    Generated videos are automatically uploaded to Cloudinary cloud storage
+    for persistence and reuse as future references. Cloudinary URLs can be
+    passed as references without re-uploading.
+    """
     if _client is None:
         raise HTTPException(status_code=503, detail="API client not initialized. Server may still be starting up.")
     if _poller is None:
@@ -76,8 +151,17 @@ async def generate_video(request: VideoRequest) -> VideoResponse:
             "name": ref.name,
         }
 
-        # If it's a local file, upload it
+        # If it's a URL (including Cloudinary URLs), pass through directly
         if FileHelpers.is_url(ref.url) or ref.url.startswith("temporal:"):
+            # Track Cloudinary reference usage
+            if (_cloudinary_service
+                    and _cloudinary_service.is_enabled()
+                    and _cloudinary_service.is_cloudinary_url(ref.url)
+                    and _asset_registry):
+                record = _asset_registry.get_by_cloudinary_url(ref.url)
+                if record:
+                    _asset_registry.mark_used(record.id)
+
             refs.append(ref_dict)
         else:
             # Local file — need to upload
@@ -203,5 +287,20 @@ async def generate_video(request: VideoRequest) -> VideoResponse:
                 response.video_base64 = base64.b64encode(raw.content).decode("utf-8")
         except Exception as e:
             logger.warning(f"Download for base64 failed: {e}")
+
+    # ★ Upload to Cloudinary cloud storage (async, non-blocking)
+    if download_url and response.success:
+        try:
+            cloud_result = await asyncio.to_thread(
+                _upload_to_cloud,
+                creation_id,
+                request.model,
+                download_url,
+                request.prompt,
+            )
+            if cloud_result:
+                response.cloudinary_url = cloud_result.get("cloudinary_url")
+        except Exception as e:
+            logger.warning(f"Cloud upload post-generation failed (non-fatal): {e}")
 
     return response
