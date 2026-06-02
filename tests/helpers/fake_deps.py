@@ -375,7 +375,7 @@ class FakeCloudinaryService:
         self.download_bytes_result: bytes = b"fake-image-data"
         self.download_as_base64_result: str = "data:image/png;base64,ZmFrZQ=="
         self.delete_result: dict[str, Any] = {"result": "ok", "public_id": ""}
-        self.list_resources_result: dict[str, Any] = {"resources": [], "total": 0}
+        self.list_resources_result: dict[str, Any] = {"resources": [], "count": 0}
         self.upload_calls: list[dict] = []
         self.download_calls: list[str] = []
         self.delete_calls: list[dict] = []
@@ -392,10 +392,13 @@ class FakeCloudinaryService:
         return f"magnific-test/{asset_type}/{model_slug}/{creation_id}_{index}"
 
     def upload_from_url(self, url: str, public_id: str,
-                        resource_type: str = "auto") -> dict:
+                        resource_type: str = "auto",
+                        tags: list[str] | None = None,
+                        context: dict | None = None) -> dict:
         self.upload_calls.append({
             "method": "upload_from_url", "url": url,
             "public_id": public_id, "resource_type": resource_type,
+            "tags": tags, "context": context,
         })
         return self.upload_from_url_result
 
@@ -431,12 +434,11 @@ class FakeCloudinaryService:
 
     @staticmethod
     def extract_public_id_from_url(url: str) -> str | None:
+        """Delegate to real CloudinaryService implementation."""
         if not url or "cloudinary.com" not in url:
             return None
-        parts = url.split("/upload/")
-        if len(parts) > 1:
-            return parts[-1].rsplit(".", 1)[0]
-        return None
+        from core.cloudinary_service import CloudinaryService
+        return CloudinaryService.extract_public_id_from_url(url)
 
 
 class FakeAssetRegistry:

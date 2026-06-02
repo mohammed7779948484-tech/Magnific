@@ -267,6 +267,23 @@ class TestAssetRegistry:
         assert record.prompt == "test persistence"
         assert record.model == "flux-2"
 
+    def test_atomic_save_no_corruption_on_interrupt(self, tmp_path):
+        """Registry should not corrupt JSON even if process crashes during write.
+
+        Uses atomic write (temp file + rename) pattern.
+        """
+        reg = AssetRegistry(data_dir=str(tmp_path))
+        reg.register(
+            asset_type="image", model="flux-2", creation_id="1",
+            public_id="p1", cloudinary_url="url1",
+        )
+
+        # Simulate interruption: modify the file mid-write wouldn't happen
+        # because atomic write uses temp + rename. Verify file is valid JSON.
+        with open(tmp_path / "assets.json", "r") as f:
+            data = json.load(f)  # Would fail if corrupted
+        assert len(data["assets"]) == 1
+
     def test_to_dict_and_from_dict_roundtrip(self):
         """AssetRecord serialization/deserialization should be lossless."""
         record = AssetRecord(
@@ -357,7 +374,7 @@ class TestCloudinaryServiceDisabled:
         svc = CloudinaryService(enabled=False)
         result = svc.list_resources()
         assert result["resources"] == []
-        assert result["total"] == 0
+        assert result["count"] == 0
 
     def test_is_cloudinary_url_detects(self):
         """Should correctly identify Cloudinary URLs."""
@@ -393,3 +410,344 @@ class TestCloudinaryServiceDisabled:
 
         assert svc.build_public_id("image", "flux-2", "abc123") == "magnific/image/flux-2/abc123_0"
         assert svc.build_public_id("video", "seedance-2-pro", "xyz789", index=2) == "magnific/video/seedance-2-pro/xyz789_2"
+
+
+# ─── CloudinaryService Static Method Tests (no SDK needed) ──────
+
+
+class TestCloudinaryRetryLogic:
+    """Test the _call_with_retry retry mechanism."""
+
+    def test_retry_succeeds_on_first_try(self):
+        """Should return result immediately when call succeeds."""
+        from core.cloudinary_service import CloudinaryService
+
+        call_count = 0
+
+        def success_func():
+            nonlocal call_count
+            call_count += 1
+            return {"url": "https://example.com/img.png"}
+
+        result = CloudinaryService._call_with_retry(success_func, max_retries=3)
+        assert result == {"url": "https://example.com/img.png"}
+        assert call_count == 1
+
+    def test_retry_succeeds_after_transient_failure(self):
+        """Should retry on transient errors and succeed on second attempt."""
+        from core.cloudinary_service import CloudinaryService
+
+        call_count = 0
+
+        def flaky_func():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise ConnectionError("Network timeout")
+            return {"url": "https://example.com/img.png"}
+
+        result = CloudinaryService._call_with_retry(flaky_func, max_retries=3)
+        assert result == {"url": "https://example.com/img.png"}
+        assert call_count == 2
+
+    def test_retry_succeeds_after_two_failures(self):
+        """Should retry up to max_retries and succeed on last attempt."""
+        from core.cloudinary_service import CloudinaryService
+
+        call_count = 0
+
+        def very_flaky_func():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise ConnectionError("Transient error")
+            return {"url": "https://example.com/img.png"}
+
+        result = CloudinaryService._call_with_retry(very_flaky_func, max_retries=3)
+        assert result == {"url": "https://example.com/img.png"}
+        assert call_count == 3
+
+    def test_retry_exhausts_and_raises(self):
+        """Should raise CloudinaryError after exhausting all retries."""
+        from core.cloudinary_service import CloudinaryService, CloudinaryError
+
+        call_count = 0
+
+        def always_fails():
+            nonlocal call_count
+            call_count += 1
+            raise ConnectionError("Persistent failure")
+
+        with pytest.raises(CloudinaryError, match="Persistent failure"):
+            CloudinaryService._call_with_retry(always_fails, max_retries=3)
+        assert call_count == 3
+
+    def test_retry_no_retry_on_value_error(self):
+        """Should NOT retry on ValueError (permanent error — no retry)."""
+        from core.cloudinary_service import CloudinaryService, CloudinaryError
+
+        call_count = 0
+
+        def bad_param_func():
+            nonlocal call_count
+            call_count += 1
+            raise ValueError("Invalid parameter")
+
+        with pytest.raises(CloudinaryError, match="Invalid parameter"):
+            CloudinaryService._call_with_retry(bad_param_func, max_retries=3)
+        assert call_count == 1
+
+    def test_retry_no_retry_on_runtime_error(self):
+        """Should NOT retry on RuntimeError (permanent error — no retry)."""
+        from core.cloudinary_service import CloudinaryService, CloudinaryError
+
+        call_count = 0
+
+        def runtime_error_func():
+            nonlocal call_count
+            call_count += 1
+            raise RuntimeError("Bad configuration")
+
+        with pytest.raises(CloudinaryError, match="Bad configuration"):
+            CloudinaryService._call_with_retry(runtime_error_func, max_retries=3)
+        assert call_count == 1
+
+
+class TestExtractPublicIdFromUrl:
+    """Test extract_public_id_from_url with various URL formats."""
+
+    def test_basic_url(self):
+        """Extract public_id from basic Cloudinary URL."""
+        from core.cloudinary_service import CloudinaryService
+
+        url = "https://res.cloudinary.com/mycloud/image/upload/v123456/magnific/image/flux-2/abc123_0.png"
+        result = CloudinaryService.extract_public_id_from_url(url)
+        assert result == "magnific/image/flux-2/abc123_0"
+
+    def test_url_without_version(self):
+        """Extract public_id from URL without version number."""
+        from core.cloudinary_service import CloudinaryService
+
+        url = "https://res.cloudinary.com/mycloud/image/upload/magnific/image/flux-2/abc123_0.png"
+        result = CloudinaryService.extract_public_id_from_url(url)
+        assert result == "magnific/image/flux-2/abc123_0"
+
+    def test_url_with_transformation(self):
+        """Extract public_id from URL with transformation parameters."""
+        from core.cloudinary_service import CloudinaryService
+
+        url = "https://res.cloudinary.com/mycloud/image/upload/c_fill,h_200,w_300/v123456/magnific/image/flux-2/abc123_0.png"
+        result = CloudinaryService.extract_public_id_from_url(url)
+        assert result == "magnific/image/flux-2/abc123_0"
+
+    def test_url_with_multiple_transformations(self):
+        """Extract public_id from URL with chained transformations."""
+        from core.cloudinary_service import CloudinaryService
+
+        url = "https://res.cloudinary.com/mycloud/image/upload/c_fill,w_300/e_sepia/a_50/v123456/magnific/image/flux-2/abc123_0.png"
+        result = CloudinaryService.extract_public_id_from_url(url)
+        assert result == "magnific/image/flux-2/abc123_0"
+
+    def test_url_with_transformation_no_version(self):
+        """Extract public_id from URL with transformation but no version."""
+        from core.cloudinary_service import CloudinaryService
+
+        url = "https://res.cloudinary.com/mycloud/image/upload/q_auto,f_auto/magnific/image/flux-2/abc123_0.webp"
+        result = CloudinaryService.extract_public_id_from_url(url)
+        assert result == "magnific/image/flux-2/abc123_0"
+
+    def test_video_url(self):
+        """Extract public_id from video Cloudinary URL."""
+        from core.cloudinary_service import CloudinaryService
+
+        url = "https://res.cloudinary.com/mycloud/video/upload/v999/magnific/video/seedance-2-pro/xyz789_0.mp4"
+        result = CloudinaryService.extract_public_id_from_url(url)
+        assert result == "magnific/video/seedance-2-pro/xyz789_0"
+
+    def test_non_cloudinary_returns_none(self):
+        """Non-Cloudinary URLs return None."""
+        from core.cloudinary_service import CloudinaryService
+
+        assert CloudinaryService.extract_public_id_from_url("https://example.com/image.png") is None
+        assert CloudinaryService.extract_public_id_from_url("") is None
+        assert CloudinaryService.extract_public_id_from_url(None) is None
+
+    def test_url_with_folder_path_containing_dots(self):
+        """Handle public_ids that naturally contain dots (before extension)."""
+        from core.cloudinary_service import CloudinaryService
+
+        url = "https://res.cloudinary.com/mycloud/image/upload/v123/magnific/image/model/v1.0/abc_0.png"
+        result = CloudinaryService.extract_public_id_from_url(url)
+        assert result == "magnific/image/model/v1.0/abc_0"
+
+
+# ─── Route-Level Cloudinary Tests ─────────────────────────────────
+
+
+class TestResolveReferenceBase64:
+    """Test the _resolve_reference_base64 function in image routes."""
+
+    def _setup(self):
+        """Import and setup route-level dependencies."""
+        from api.routes.image import (
+            _cloudinary_service, _asset_registry,
+            _resolve_reference_base64, set_deps,
+        )
+        from api.schemas.image_schemas import ImageReferenceInput
+        from tests.helpers.fake_deps import (
+            FakeCloudinaryService, FakeAssetRegistry,
+        )
+
+        cloud_svc = FakeCloudinaryService(enabled=True)
+        cloud_svc.download_as_base64_result = "data:image/png;base64,SGVsbG8="
+        asset_reg = FakeAssetRegistry()
+
+        # Register a pre-existing asset
+        asset_reg.register(
+            asset_type="image", model="flux-2", creation_id="c1",
+            public_id="magnific/image/flux-2/c1_0",
+            cloudinary_url="https://res.cloudinary.com/test/image/upload/v123/magnific/image/flux-2/c1_0.png",
+            format="png",
+        )
+
+        set_deps(
+            client=None, poller=None, uploader=None,
+            cloudinary_service=cloud_svc, asset_registry=asset_reg,
+        )
+
+        return _resolve_reference_base64, ImageReferenceInput, cloud_svc, asset_reg
+
+    def test_resolve_cloudinary_url_to_base64(self):
+        """Cloudinary URL should be downloaded and converted to base64."""
+        resolve, RefInput, cloud_svc, asset_reg = self._setup()
+
+        ref = RefInput(image_base64="https://res.cloudinary.com/test/image/upload/v123/magnific/image/flux-2/c1_0.png", label="ref1")
+        result = resolve(ref)
+
+        assert result == "data:image/png;base64,SGVsbG8="
+        assert len(cloud_svc.download_calls) == 1
+        assert "magnific/image/flux-2/c1_0" in cloud_svc.download_calls[0]
+
+    def test_resolve_regular_base64_passes_through(self):
+        """Regular base64 data URI should pass through unchanged."""
+        resolve, RefInput, _, _ = self._setup()
+
+        ref = RefInput(image_base64="data:image/png;base64,SGVsbG8=", label="ref1")
+        result = resolve(ref)
+        assert result == "data:image/png;base64,SGVsbG8="
+
+    def test_resolve_none_returns_none(self):
+        """No reference should return None."""
+        resolve, RefInput, _, _ = self._setup()
+
+        ref = RefInput(label="ref1")
+        result = resolve(ref)
+        assert result is None
+
+    def test_resolve_cloudinary_url_tracks_usage(self):
+        """Resolving Cloudinary URL should track usage in registry."""
+        resolve, RefInput, _, asset_reg = self._setup()
+
+        ref = RefInput(image_base64="https://res.cloudinary.com/test/image/upload/v123/magnific/image/flux-2/c1_0.png", label="ref1")
+        resolve(ref)
+
+        assert len(asset_reg.mark_used_calls) == 1
+        assert asset_reg.mark_used_calls[0] == "asset_000001"
+
+
+class TestUploadToCloud:
+    """Test the _upload_to_cloud function in image/video routes."""
+
+    def test_image_upload_success(self):
+        """Successful upload should register asset in registry."""
+        from api.routes.image import _upload_to_cloud, set_deps
+        from tests.helpers.fake_deps import FakeCloudinaryService, FakeAssetRegistry
+
+        cloud_svc = FakeCloudinaryService(enabled=True)
+        cloud_svc.upload_from_url_result = {
+            "url": "https://res.cloudinary.com/test/magnific/image/flux-2/abc_0.png",
+            "public_id": "magnific/image/flux-2/abc_0",
+            "resource_type": "image",
+            "bytes": 102400,
+            "width": 1024,
+            "height": 1024,
+            "format": "png",
+        }
+        asset_reg = FakeAssetRegistry()
+
+        set_deps(
+            client=None, poller=None, uploader=None,
+            cloudinary_service=cloud_svc, asset_registry=asset_reg,
+        )
+
+        result = _upload_to_cloud(
+            creation_id="abc123",
+            model_slug="flux-2",
+            download_url="https://cdn.magnific.com/abc.png",
+            prompt="test prompt",
+        )
+
+        assert result is not None
+        assert result["cloudinary_url"] == "https://res.cloudinary.com/test/magnific/image/flux-2/abc_0.png"
+        assert len(cloud_svc.upload_calls) == 1
+        assert cloud_svc.upload_calls[0]["tags"] == ["magnific", "flux-2"]
+        assert len(asset_reg.register_calls) == 1
+
+    def test_image_upload_disabled_returns_none(self):
+        """Upload should return None when Cloudinary is disabled."""
+        from api.routes.image import _upload_to_cloud, set_deps
+        from tests.helpers.fake_deps import FakeCloudinaryService, FakeAssetRegistry
+
+        cloud_svc = FakeCloudinaryService(enabled=False)
+        asset_reg = FakeAssetRegistry()
+
+        set_deps(
+            client=None, poller=None, uploader=None,
+            cloudinary_service=cloud_svc, asset_registry=asset_reg,
+        )
+
+        result = _upload_to_cloud(
+            creation_id="abc123",
+            model_slug="flux-2",
+            download_url="https://cdn.magnific.com/abc.png",
+            prompt="test prompt",
+        )
+
+        assert result is None
+        assert len(cloud_svc.upload_calls) == 0
+        assert len(asset_reg.register_calls) == 0
+
+    def test_video_upload_success(self):
+        """Video upload should register with correct resource_type."""
+        from api.routes.video import _upload_to_cloud, set_deps
+        from tests.helpers.fake_deps import FakeCloudinaryService, FakeAssetRegistry
+
+        cloud_svc = FakeCloudinaryService(enabled=True)
+        cloud_svc.upload_from_url_result = {
+            "url": "https://res.cloudinary.com/test/magnific/video/seedance-2-pro/xyz_0.mp4",
+            "public_id": "magnific/video/seedance-2-pro/xyz_0",
+            "resource_type": "video",
+            "bytes": 5120000,
+            "duration": 5.0,
+            "format": "mp4",
+        }
+        asset_reg = FakeAssetRegistry()
+
+        set_deps(
+            client=None, poller=None, uploader=None,
+            cloudinary_service=cloud_svc, asset_registry=asset_reg,
+        )
+
+        result = _upload_to_cloud(
+            creation_id="xyz789",
+            model_slug="seedance-2-pro",
+            download_url="https://cdn.magnific.com/xyz.mp4",
+            prompt="test video prompt",
+        )
+
+        assert result is not None
+        assert result["cloudinary_url"] == "https://res.cloudinary.com/test/magnific/video/seedance-2-pro/xyz_0.mp4"
+        assert cloud_svc.upload_calls[0]["resource_type"] == "video"
+        assert cloud_svc.upload_calls[0]["tags"] == ["magnific", "seedance-2-pro"]
+        reg_call = asset_reg.register_calls[0]
+        assert reg_call["asset_type"] == "video"

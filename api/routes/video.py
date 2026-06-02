@@ -83,6 +83,7 @@ def _upload_to_cloud(
             url=download_url,
             public_id=public_id,
             resource_type="video",
+            tags=["magnific", model_slug],
         )
 
         cloudinary_url = result.get("url", "")

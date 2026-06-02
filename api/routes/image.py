@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from api.schemas.image_schemas import ImageReferenceInput, ImageRequest, ImageResponse
 from config.endpoints import Endpoints
 from core.client import MagnificClient
+from core.cloudinary_service import CloudinaryService
 from core.poller import Poller
 from core.uploader import Uploader
 from models.base import ModelRegistry
@@ -142,6 +143,7 @@ def _upload_to_cloud(
             url=download_url,
             public_id=public_id,
             resource_type="image",
+            tags=["magnific", model_slug],
         )
 
         cloudinary_url = result.get("url", "")

@@ -164,14 +164,21 @@ class AssetRegistry:
             self._id_counter = 0
 
     def _save(self) -> None:
-        """Persist assets to JSON file."""
+        """Persist assets to JSON file using atomic write (temp + rename).
+
+        Atomic write prevents file corruption if the process crashes during write:
+        1. Write to a temporary file in the same directory
+        2. Rename (os.replace) the temp file to the target — atomic on POSIX
+        """
         try:
             data = {
                 "id_counter": self._id_counter,
                 "assets": [record.to_dict() for record in self._assets.values()],
             }
-            with open(self._file_path, "w", encoding="utf-8") as f:
+            tmp_path = self._file_path.with_suffix(".tmp")
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_path, self._file_path)
         except Exception as e:
             logger.error(f"Failed to save registry: {e}")
 
